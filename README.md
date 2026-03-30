@@ -1,6 +1,6 @@
 # 🧭 MemoryPilot
 
-**SillyTavern 可控记忆管理系统** — 半插件化架构，适配 LWB (LittleWhiteBox) https://github.com/RT15548/LittleWhiteBox。
+**SillyTavern 可控记忆管理系统** — 半插件化架构，适配 LWB (LittleWhiteBox) https://github.com/RT15548/LittleWhiteBox
 
 为角色扮演 / 长期对话场景提供 **可控、可编辑、可解释** 的记忆召回能力。你可以精确管理 AI 在每轮对话中"想起"什么、忽略什么。
 
