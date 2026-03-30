@@ -8,6 +8,7 @@ import { runRecall as runRecallV32 } from './src/recall-v32.js';
 import { openPanel } from './src/panel.js';
 import { openApiConfig } from './src/api-config.js';
 import { openMonitor } from './src/monitor.js';
+import { migrateIfNeeded, detectLegacyArtifacts, cleanupLegacyArtifacts, onChatChanged } from './src/storage.js';
 
 const MODULE_NAME = 'MemoryPilot';
 
@@ -74,6 +75,8 @@ window.MemoryPilot = {
   openPanel,
   openApiConfig,
   openMonitor,
+  detectLegacyArtifacts,
+  cleanupLegacyArtifacts,
 };
 
 // ====== Chat Input Bar Buttons (same position as original taskjs) ======
@@ -164,7 +167,8 @@ function hookRecall() {
     ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, async () => {
       try { await runRecall(); } catch (e) { console.error('[MP] Recall error:', e); }
     });
-    ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, () => {
+    ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, async () => {
+      try { onChatChanged(); } catch {}
       try {
         const prev = localStorage.getItem('mp_active_chat');
         const curr = String(ctx.chatId ?? '');
@@ -173,6 +177,13 @@ function hookRecall() {
         }
         localStorage.setItem('mp_active_chat', curr);
       } catch {}
+      try {
+        await migrateIfNeeded();
+        const report = detectLegacyArtifacts();
+        if (report.hasLegacyMpMetadata || report.hasLegacyMpVars || report.lwbSnapHasMpTraces) {
+          toastr?.info?.('检测到当前聊天存在旧版 MP / LWB 快照痕迹，可在 MP 面板 → 过滤 中清理。');
+        }
+      } catch (e) { console.warn('[MP] detect legacy err', e); }
     });
   } catch (e) {
     console.warn('[MP] Could not hook events:', e);
@@ -188,6 +199,14 @@ jQuery(async () => {
   if (!ctx.extensionSettings[MODULE_NAME]) {
     ctx.extensionSettings[MODULE_NAME] = {};
   }
+
+  try {
+    await migrateIfNeeded();
+    const report = detectLegacyArtifacts();
+    if (report.hasLegacyMpMetadata || report.hasLegacyMpVars || report.lwbSnapHasMpTraces) {
+      toastr?.info?.('检测到当前聊天存在旧版 MP / LWB 快照痕迹，可在 MP 面板 → 过滤 中清理。');
+    }
+  } catch (e) { console.warn('[MP] startup migration err', e); }
 
   // Settings panel in extensions drawer
   const html = buildSettingsHtml();

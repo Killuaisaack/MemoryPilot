@@ -35,6 +35,20 @@ let _chatKey = null;
 let _settingsSaveTimer = null;
 const _SETTINGS_DEBOUNCE = 8000;
 
+
+function byteLen(value) {
+  try { return new Blob([typeof value === "string" ? value : JSON.stringify(value)]).size; } catch {
+    try { return JSON.stringify(value).length * 2; } catch { return 0; }
+  }
+}
+
+function formatBytes(n) {
+  const num = Number(n) || 0;
+  if (num < 1024) return `${num} B`;
+  if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`;
+  return `${(num / 1024 / 1024).toFixed(2)} MB`;
+}
+
 function getCtx() {
   if (!_ctx) _ctx = SillyTavern?.getContext?.() || window.SillyTavern?.getContext?.();
   return _ctx;
@@ -315,4 +329,170 @@ export function loadStickyState() {
 
 export async function saveStickyState(state) {
   await saveConfig('stickyState', state);
+}
+
+
+// ====== Legacy artifact detection / cleanup ======
+
+export function detectLegacyArtifacts() {
+  const ctx = getCtx();
+  const report = {
+    hasLegacyMpMetadata: false,
+    hasLegacyMpVars: false,
+    lwbSnapHasMpTraces: false,
+    lwbSnapEntryCount: 0,
+    lwbSnapMpTraceCount: 0,
+    lwbSnapSize: 0,
+    mpMetadataSize: 0,
+    mpVarCount: 0,
+    mpVarSize: 0,
+    keys: [],
+    summary: '',
+  };
+
+  try {
+    const ns = ctx?.chatMetadata?.extensions?.[META_NS];
+    if (ns && Object.keys(ns).length) {
+      report.hasLegacyMpMetadata = true;
+      report.mpMetadataSize = byteLen(ns);
+      report.keys.push('chat_metadata.extensions.MemoryPilot');
+    }
+  } catch {}
+
+  try {
+    const vars = ctx?.chatMetadata?.variables || {};
+    const mpKeys = Object.keys(vars).filter(k => String(k).startsWith('mp_'));
+    if (mpKeys.length) {
+      report.hasLegacyMpVars = true;
+      report.mpVarCount = mpKeys.length;
+      report.mpVarSize = byteLen(Object.fromEntries(mpKeys.map(k => [k, vars[k]])));
+      report.keys.push(`chat_metadata.variables(mp_* x${mpKeys.length})`);
+    }
+  } catch {}
+
+  try {
+    const snap = ctx?.chatMetadata?.LWB_SNAP;
+    if (snap && typeof snap === 'object') {
+      report.lwbSnapEntryCount = Object.keys(snap).length;
+      report.lwbSnapSize = byteLen(snap);
+      for (const entry of Object.values(snap)) {
+        const vars = entry?.vars;
+        if (!vars || typeof vars !== 'object') continue;
+        const mpKeys = Object.keys(vars).filter(k => String(k).startsWith('mp_'));
+        if (mpKeys.length) {
+          report.lwbSnapHasMpTraces = true;
+          report.lwbSnapMpTraceCount += mpKeys.length;
+        }
+      }
+      if (report.lwbSnapHasMpTraces) {
+        report.keys.push(`chat_metadata.LWB_SNAP(mp_* traces x${report.lwbSnapMpTraceCount})`);
+      }
+    }
+  } catch {}
+
+  const parts = [];
+  if (report.hasLegacyMpMetadata) parts.push(`MP元数据 ${formatBytes(report.mpMetadataSize)}`);
+  if (report.hasLegacyMpVars) parts.push(`MP变量 ${report.mpVarCount}项 / ${formatBytes(report.mpVarSize)}`);
+  if (report.lwbSnapHasMpTraces) parts.push(`LWB快照中的MP痕迹 ${report.lwbSnapMpTraceCount}项 / ${formatBytes(report.lwbSnapSize)}`);
+  report.summary = parts.length ? parts.join('；') : '未发现旧版 MP / LWB 快照痕迹';
+  return report;
+}
+
+export async function cleanupLegacyArtifacts(options = {}) {
+  const ctx = getCtx();
+  const opts = {
+    removeMpMetadata: options.removeMpMetadata !== false,
+    removeMpVariables: options.removeMpVariables !== false,
+    removeLwbMpTraces: options.removeLwbMpTraces === true,
+    pruneEmptyLwbEntries: options.pruneEmptyLwbEntries !== false,
+    removeLegacyLocalStorage: options.removeLegacyLocalStorage !== false,
+  };
+  const result = {
+    removedMpMetadata: false,
+    removedMpVariables: [],
+    removedLwbSnapVars: 0,
+    prunedLwbSnapEntries: 0,
+    removedLocalStorage: [],
+    changed: false,
+  };
+
+  if (!ctx) return result;
+  ctx.chatMetadata = ctx.chatMetadata || {};
+
+  try {
+    if (opts.removeMpMetadata && ctx.chatMetadata?.extensions?.[META_NS]) {
+      delete ctx.chatMetadata.extensions[META_NS];
+      result.removedMpMetadata = true;
+      result.changed = true;
+    }
+  } catch {}
+
+  try {
+    if (opts.removeMpVariables && ctx.chatMetadata?.variables) {
+      for (const k of Object.keys(ctx.chatMetadata.variables)) {
+        if (String(k).startsWith('mp_')) {
+          delete ctx.chatMetadata.variables[k];
+          result.removedMpVariables.push(k);
+          result.changed = true;
+        }
+      }
+      if (!Object.keys(ctx.chatMetadata.variables).length) delete ctx.chatMetadata.variables;
+    }
+  } catch {}
+
+  try {
+    if (opts.removeLwbMpTraces && ctx.chatMetadata?.LWB_SNAP && typeof ctx.chatMetadata.LWB_SNAP === 'object') {
+      for (const snapKey of Object.keys(ctx.chatMetadata.LWB_SNAP)) {
+        const entry = ctx.chatMetadata.LWB_SNAP[snapKey];
+        if (entry?.vars && typeof entry.vars === 'object') {
+          for (const key of Object.keys(entry.vars)) {
+            if (String(key).startsWith('mp_')) {
+              delete entry.vars[key];
+              result.removedLwbSnapVars += 1;
+              result.changed = true;
+            }
+          }
+          if (!Object.keys(entry.vars).length) delete entry.vars;
+        }
+        const rulesEmpty = !entry?.rules || (typeof entry.rules === 'object' && !Object.keys(entry.rules).length);
+        const varsEmpty = !entry?.vars || (typeof entry.vars === 'object' && !Object.keys(entry.vars).length);
+        if (opts.pruneEmptyLwbEntries && rulesEmpty && varsEmpty) {
+          delete ctx.chatMetadata.LWB_SNAP[snapKey];
+          result.prunedLwbSnapEntries += 1;
+          result.changed = true;
+        }
+      }
+      if (!Object.keys(ctx.chatMetadata.LWB_SNAP).length) delete ctx.chatMetadata.LWB_SNAP;
+    }
+  } catch {}
+
+  if (opts.removeLegacyLocalStorage) {
+    const legacyKeys = [
+      'mp_memories','mp_recall_pin','mp_recall_ctx','mp_api_config','mp_prompt','mp_kw_rebuild_prompt',
+      'mp_kw_blacklist','mp_text_clean_cfg','mp_recall_settings','mp_pending_ops'
+    ];
+    for (const k of legacyKeys) {
+      try {
+        if (localStorage.getItem(k) != null) {
+          localStorage.removeItem(k);
+          result.removedLocalStorage.push(k);
+        }
+      } catch {}
+    }
+  }
+
+  // Rebuild minimal pointer after cleanup
+  try {
+    setPointer({ version: 1, chatKey: getChatKey(), storeMode: 'extensionSettings' });
+  } catch {}
+
+  if (result.changed) {
+    try {
+      if (typeof ctx.saveMetadata === 'function') await ctx.saveMetadata();
+      else if (typeof ctx.saveChatMetadata === 'function') await ctx.saveChatMetadata();
+      else if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+    } catch (e) { console.warn('[MP] cleanup save err', e); }
+  }
+
+  return result;
 }

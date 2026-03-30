@@ -1429,6 +1429,16 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           </div>
           <button class="btn bp1" id="mp_clsv" style="width:100%;padding:9px;font-size:13px">保存文本清洗规则</button>
           <div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.08)">
+            <div class="fg"><label style="font-size:13px;color:#fff;font-weight:600">旧版数据自检 / 清理</label></div>
+            <div class="ht" id="mp_cleanup_summary" style="margin-bottom:8px">正在检测当前聊天中的旧版 MP / LWB 快照痕迹…</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn" id="mp_cleanup_refresh" style="flex:1;padding:9px;font-size:13px">刷新检测</button>
+              <button class="btn" id="mp_cleanup_mp" style="flex:1;padding:9px;font-size:13px">清理旧 MP 痕迹</button>
+              <button class="btn bd1" id="mp_cleanup_lwb" style="flex:1;padding:9px;font-size:13px">清理 LWB 快照中的 MP 痕迹</button>
+            </div>
+            <div class="ht" id="mp_cleanup_status" style="margin-top:6px"></div>
+          </div>
+          <div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.08)">
             <div class="fg"><label style="font-size:13px;color:#fff;font-weight:600">记忆数据 导出 / 导入</label></div>
             <div class="ht" style="margin-bottom:10px">导出包含：全部记忆、召回设置、关键词黑名单、文本清洗规则、API 配置、Prompt 模板。可在不同酒馆环境间迁移。</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -2222,6 +2232,48 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     ev.target.value = '';
   };
 
+
+  $('mp_cleanup_refresh').onclick = () => {
+    const report = renderCleanupSummary();
+    setCleanupStatus('检测完成：' + (report?.summary || '未发现痕迹'));
+  };
+
+  $('mp_cleanup_mp').onclick = async () => {
+    try {
+      const res = await window.MemoryPilot?.cleanupLegacyArtifacts?.({
+        removeMpMetadata: true,
+        removeMpVariables: true,
+        removeLegacyLocalStorage: true,
+        removeLwbMpTraces: false,
+      });
+      renderCleanupSummary();
+      const msg = `已清理旧 MP 痕迹：metadata=${res?.removedMpMetadata ? '1' : '0'}，变量=${res?.removedMpVariables?.length || 0}，localStorage=${res?.removedLocalStorage?.length || 0}`;
+      setCleanupStatus(msg, true);
+      toastr?.success?.('已清理当前聊天中的旧 MP 痕迹');
+    } catch (e) {
+      setCleanupStatus('清理失败：' + (e?.message || e), false);
+      toastr?.error?.('清理失败');
+    }
+  };
+
+  $('mp_cleanup_lwb').onclick = async () => {
+    try {
+      const res = await window.MemoryPilot?.cleanupLegacyArtifacts?.({
+        removeMpMetadata: false,
+        removeMpVariables: false,
+        removeLegacyLocalStorage: false,
+        removeLwbMpTraces: true,
+      });
+      renderCleanupSummary();
+      const msg = `已清理 LWB 快照中的 MP 痕迹：vars=${res?.removedLwbSnapVars || 0}，空快照条目=${res?.prunedLwbSnapEntries || 0}`;
+      setCleanupStatus(msg, true);
+      toastr?.success?.('已清理 LWB 快照中的 MP 痕迹');
+    } catch (e) {
+      setCleanupStatus('清理失败：' + (e?.message || e), false);
+      toastr?.error?.('清理失败');
+    }
+  };
+
   let _abort=null;
 
   // 批量分析结果渲染（复用于实时和恢复场景）
@@ -2239,6 +2291,28 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         toastr?.success?.('已添加');
       });
     };
+  };
+
+
+  const fmtCleanupSummary = (report) => {
+    if (!report) return '未检测到数据';
+    return report.summary || '未发现旧版 MP / LWB 快照痕迹';
+  };
+
+  const renderCleanupSummary = () => {
+    const report = window.MemoryPilot?.detectLegacyArtifacts?.();
+    const el = $('mp_cleanup_summary');
+    if (!el) return report;
+    el.textContent = fmtCleanupSummary(report);
+    el.style.color = (report && (report.hasLegacyMpMetadata || report.hasLegacyMpVars || report.lwbSnapHasMpTraces)) ? '#fbbf24' : '#9ca3af';
+    return report;
+  };
+
+  const setCleanupStatus = (text, ok = true) => {
+    const el = $('mp_cleanup_status');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = ok ? '#4ade80' : '#f87171';
   };
 
   // 恢复上次的持久化结果
@@ -2266,6 +2340,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   };
   // 面板打开时立即检查
   try { restorePendingBatch(); } catch {}
+  try { renderCleanupSummary(); } catch {}
 
   $('mp_brun').onclick=async()=>{
     if(_abort){_abort.abort();_abort=null;$('mp_brun').textContent='开始分析';try{await savePendingOp('batch',{status:'error',error:'手动停止'});}catch{}return;}
