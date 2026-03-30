@@ -40,7 +40,10 @@ export async function openApiConfig() {
     const c = window.SillyTavern?.getContext?.();
     if (!c?.extensionSettings) return null;
     if (!c.extensionSettings[_EXT_NAME]) c.extensionSettings[_EXT_NAME] = {};
-    const ck = String(c.chatId ?? c.chatMetadata?.chat_file_name ?? 'default');
+    const charId = c?.characterId;
+    const charObj = Number.isInteger(charId) ? c?.characters?.[charId] : null;
+    const charScope = String(charObj?.avatar ?? charObj?.name ?? c?.chatMetadata?.character_name ?? c?.name2 ?? '');
+    const ck = `${String(c.chatId ?? c.chatMetadata?.chat_file_name ?? 'default')}::${charScope}`;
     if (!c.extensionSettings[_EXT_NAME][ck]) c.extensionSettings[_EXT_NAME][ck] = {};
     return c.extensionSettings[_EXT_NAME][ck];
   };

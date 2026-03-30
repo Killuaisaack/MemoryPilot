@@ -19,9 +19,16 @@ export async function openPanel() {
   const ctx = window.SillyTavern?.getContext?.();
   if (!ctx) return;
   const chat = ctx.chat || [];
+  const __mpScopeKey = (() => {
+    const charId = ctx?.characterId;
+    const charObj = Number.isInteger(charId) ? ctx?.characters?.[charId] : null;
+    const charScope = String(charObj?.avatar ?? charObj?.name ?? ctx?.chatMetadata?.character_name ?? ctx?.name2 ?? '');
+    const baseChat = String(ctx.chatId ?? ctx.chatMetadata?.chat_file_name ?? '');
+    return `${baseChat}::${charScope}`;
+  })();
 
   // Chat isolation: clear stale localStorage on chat switch
-  const _cid = String(ctx.chatId ?? ctx.chatMetadata?.chat_file_name ?? '');
+  const _cid = __mpScopeKey;
   if (_cid) {
     const _prev = localStorage.getItem('mp_active_chat');
     if (_prev !== _cid) {
@@ -51,7 +58,10 @@ export async function openPanel() {
     const c = window.SillyTavern?.getContext?.();
     if (!c?.extensionSettings) return null;
     if (!c.extensionSettings[_EXT_NAME]) c.extensionSettings[_EXT_NAME] = {};
-    const ck = String(c.chatId ?? c.chatMetadata?.chat_file_name ?? 'default');
+    const charId = c?.characterId;
+    const charObj = Number.isInteger(charId) ? c?.characters?.[charId] : null;
+    const charScope = String(charObj?.avatar ?? charObj?.name ?? c?.chatMetadata?.character_name ?? c?.name2 ?? '');
+    const ck = `${String(c.chatId ?? c.chatMetadata?.chat_file_name ?? 'default')}::${charScope}`;
     if (!c.extensionSettings[_EXT_NAME][ck]) c.extensionSettings[_EXT_NAME][ck] = {};
     return c.extensionSettings[_EXT_NAME][ck];
   };

@@ -62,7 +62,17 @@ function refreshCtx() {
 function getChatKey() {
   if (_chatKey) return _chatKey;
   const ctx = getCtx();
-  _chatKey = String(ctx?.chatId ?? ctx?.chatMetadata?.chat_file_name ?? 'default');
+  const charId = ctx?.characterId;
+  const charObj = Number.isInteger(charId) ? ctx?.characters?.[charId] : null;
+  const charScope = String(
+    charObj?.avatar ??
+    charObj?.name ??
+    ctx?.chatMetadata?.character_name ??
+    ctx?.name2 ??
+    ''
+  );
+  const baseChat = String(ctx?.chatId ?? ctx?.chatMetadata?.chat_file_name ?? 'default');
+  _chatKey = `${baseChat}::${charScope}`;
   return _chatKey;
 }
 
@@ -312,13 +322,12 @@ export async function migrateIfNeeded() {
 
 let _prevChatKey = null;
 export function onChatChanged() {
+  resetChatKey();
   const newKey = getChatKey();
   if (_prevChatKey && _prevChatKey !== newKey) {
-    // Clear runtime caches for old chat
     try { localStorage.removeItem('mp_memories_' + _prevChatKey); } catch {}
   }
   _prevChatKey = newKey;
-  resetChatKey();
 }
 
 // ====== Sticky State (stored in extensionSettings, not chat metadata) ======
