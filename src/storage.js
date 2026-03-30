@@ -59,21 +59,45 @@ function refreshCtx() {
   return _ctx;
 }
 
-function getChatKey() {
-  if (_chatKey) return _chatKey;
+function getBaseChatKey() {
+  const ctx = getCtx();
+  return String(ctx?.chatId ?? ctx?.chatMetadata?.chat_file_name ?? 'default');
+}
+
+function getCharacterScope() {
   const ctx = getCtx();
   const charId = ctx?.characterId;
   const charObj = Number.isInteger(charId) ? ctx?.characters?.[charId] : null;
-  const charScope = String(
+  return String(
     charObj?.avatar ??
     charObj?.name ??
     ctx?.chatMetadata?.character_name ??
     ctx?.name2 ??
     ''
   );
-  const baseChat = String(ctx?.chatId ?? ctx?.chatMetadata?.chat_file_name ?? 'default');
+}
+
+function getChatKey() {
+  if (_chatKey) return _chatKey;
+  const baseChat = getBaseChatKey();
+  const charScope = getCharacterScope();
   _chatKey = `${baseChat}::${charScope}`;
   return _chatKey;
+}
+
+function getLegacyChatKeys() {
+  const base = getBaseChatKey();
+  const scope = getCharacterScope();
+  const keys = [];
+  // pre-character-isolation storage
+  keys.push(base);
+  // pointer may already carry an old key
+  try {
+    const ptrKey = String(getPointer()?.chatKey || '').trim();
+    if (ptrKey) keys.push(ptrKey);
+  } catch {}
+  // extra compatibility: if scope empty, also try bare base and default forms only once
+  return Array.from(new Set(keys.filter(Boolean)));
 }
 
 export function resetChatKey() {
@@ -98,6 +122,18 @@ function getChatStore() {
   const key = getChatKey();
   if (!store[key]) store[key] = {};
   return store[key];
+}
+
+function findLegacyChatStore() {
+  const store = getStore();
+  if (!store) return null;
+  for (const legacyKey of getLegacyChatKeys()) {
+    const legacyStore = store?.[legacyKey];
+    if (legacyStore && typeof legacyStore === 'object' && Object.keys(legacyStore).length) {
+      return { key: legacyKey, store: legacyStore };
+    }
+  }
+  return null;
 }
 
 function saveSettingsDebounced() {
@@ -167,12 +203,33 @@ export async function loadMemories() {
     if (raw) return JSON.parse(raw);
   } catch {}
 
+  // 1.5 legacy localStorage cache (pre-character-isolation)
+  try {
+    for (const legacyKey of getLegacyChatKeys()) {
+      const raw = localStorage.getItem('mp_memories_' + legacyKey);
+      if (raw) {
+        const mems = JSON.parse(raw);
+        if (Array.isArray(mems) && mems.length) {
+          console.log('[MP] Migrating memories from legacy localStorage key:', legacyKey);
+          await saveMemories(mems);
+          return mems;
+        }
+      }
+    }
+  } catch {}
+
   // 2. extensionSettings (server-synced)
   try {
     const store = getChatStore();
     if (store?.memories?.length) {
       cacheMemories(store.memories);
       return store.memories;
+    }
+    const legacy = findLegacyChatStore();
+    if (legacy?.store?.memories?.length) {
+      console.log('[MP] Migrating memories from legacy store key:', legacy.key);
+      await saveMemories(legacy.store.memories);
+      return legacy.store.memories;
     }
   } catch {}
 
@@ -240,10 +297,24 @@ export function loadConfig(configKey, fallback) {
     const raw = localStorage.getItem('mp_cfg_' + configKey + '_' + getChatKey());
     if (raw) return JSON.parse(raw);
   } catch {}
+  // legacy localStorage key
+  try {
+    for (const legacyKey of getLegacyChatKeys()) {
+      const raw = localStorage.getItem('mp_cfg_' + configKey + '_' + legacyKey);
+      if (raw) {
+        const value = JSON.parse(raw);
+        // async-free migration: cache under new key for next reads
+        try { localStorage.setItem('mp_cfg_' + configKey + '_' + getChatKey(), JSON.stringify(value)); } catch {}
+        return value;
+      }
+    }
+  } catch {}
   // extensionSettings
   try {
     const store = getChatStore();
     if (store?.[configKey] != null) return store[configKey];
+    const legacy = findLegacyChatStore();
+    if (legacy?.store?.[configKey] != null) return legacy.store[configKey];
   } catch {}
   // Legacy chatMetadata
   try {
@@ -324,9 +395,7 @@ let _prevChatKey = null;
 export function onChatChanged() {
   resetChatKey();
   const newKey = getChatKey();
-  if (_prevChatKey && _prevChatKey !== newKey) {
-    try { localStorage.removeItem('mp_memories_' + _prevChatKey); } catch {}
-  }
+  // keep previous scoped cache so switching back to the same character can restore quickly
   _prevChatKey = newKey;
 }
 

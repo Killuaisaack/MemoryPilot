@@ -174,9 +174,7 @@ function hookRecall() {
         const charId = ctx?.characterId;
         const charObj = Number.isInteger(charId) ? ctx?.characters?.[charId] : null;
         const curr = `${String(ctx.chatId ?? ctx.chatMetadata?.chat_file_name ?? '')}::${String(charObj?.avatar ?? charObj?.name ?? ctx?.chatMetadata?.character_name ?? ctx?.name2 ?? '')}`;
-        if (prev && prev !== curr) {
-          try { localStorage.removeItem('mp_memories_' + prev); } catch {}
-        }
+        // keep previous scoped cache so switching back can restore legacy / current content
         localStorage.setItem('mp_active_chat', curr);
       } catch {}
       try {
