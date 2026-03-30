@@ -10,7 +10,6 @@ import { openApiConfig } from './src/api-config.js';
 import { openMonitor } from './src/monitor.js';
 
 const MODULE_NAME = 'MemoryPilot';
-const extensionFolderPath = `scripts/extensions/third-party/MemoryPilot`;
 
 function getSettings() {
   const { extensionSettings } = SillyTavern.getContext();
@@ -18,7 +17,6 @@ function getSettings() {
     extensionSettings[MODULE_NAME] = {};
   }
   const s = extensionSettings[MODULE_NAME];
-  // Global settings (not per-chat)
   if (!s._global) {
     s._global = {
       recallVersion: 'v34',
@@ -32,7 +30,6 @@ function saveSettings() {
   try { SillyTavern.getContext().saveSettingsDebounced(); } catch {}
 }
 
-// Run the selected recall engine version
 async function runRecall() {
   const settings = getSettings();
   if (settings.recallVersion === 'v32') {
@@ -67,7 +64,6 @@ export function getRecallVersion() {
   return getSettings().recallVersion || 'v34';
 }
 
-// Make these available globally for panel/monitor code
 window.MemoryPilot = {
   getCustomPrompt,
   saveCustomPrompt,
@@ -80,7 +76,49 @@ window.MemoryPilot = {
   openMonitor,
 };
 
-// ====== Settings Panel HTML ======
+// ====== Chat Input Bar Buttons (same position as original taskjs) ======
+
+function addChatBarButtons() {
+  if (document.getElementById('mp_chat_buttons')) return;
+
+  const bar = document.createElement('div');
+  bar.id = 'mp_chat_buttons';
+  bar.className = 'mp-chat-bar';
+  bar.innerHTML = `
+    <button id="mp_btn_panel" class="mp-chat-btn" title="MP 管理面板">🧭 MP 管理面板</button>
+    <button id="mp_btn_api" class="mp-chat-btn" title="MP API配置">🧭 MP API配置</button>
+    <button id="mp_btn_monitor" class="mp-chat-btn" title="MP 召回监控">🧭 MP 召回监控</button>
+  `;
+
+  // Insert above the chat input form - same position as taskjs buttons
+  const targets = [
+    '#qr--bar',                    // Quick Reply bar (if present, insert before it)
+    '#form_sheld',                 // The send form container
+    '#send_form',                  // The actual send form
+  ];
+
+  let inserted = false;
+  for (const sel of targets) {
+    const target = document.querySelector(sel);
+    if (target) {
+      target.parentNode.insertBefore(bar, target);
+      inserted = true;
+      break;
+    }
+  }
+
+  if (!inserted) {
+    // Fallback: append to the chat area
+    const sheld = document.getElementById('sheld');
+    if (sheld) sheld.appendChild(bar);
+  }
+
+  document.getElementById('mp_btn_panel').addEventListener('click', () => openPanel());
+  document.getElementById('mp_btn_api').addEventListener('click', () => openApiConfig());
+  document.getElementById('mp_btn_monitor').addEventListener('click', () => openMonitor());
+}
+
+// ====== Settings Panel in Extensions Drawer ======
 
 function buildSettingsHtml() {
   const settings = getSettings();
@@ -88,7 +126,7 @@ function buildSettingsHtml() {
     <div class="mp-settings-panel">
       <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-          <b>MemoryPilot</b>
+          <b>🧭 MemoryPilot</b>
           <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -100,16 +138,8 @@ function buildSettingsHtml() {
                 <option value="v32" ${settings.recallVersion === 'v32' ? 'selected' : ''}>v32 (经典)</option>
               </select>
             </div>
-            <hr>
-            <div style="display:flex;gap:6px;flex-wrap:wrap">
-              <button id="mp_open_panel" class="menu_button">管理面板</button>
-              <button id="mp_open_api" class="menu_button">API 配置</button>
-              <button id="mp_open_monitor" class="menu_button">召回监控</button>
-            </div>
-            <div class="mp-info" style="font-size:11px;color:var(--SmartThemeQuoteColor);margin-top:4px">
-              存储: extensionSettings (服务端同步)<br>
-              Prompt 注入: chatMetadata.variables<br>
-              STscript /setvar: 0 (不被 LWB 快照)
+            <div class="mp-info" style="font-size:11px;opacity:0.6;line-height:1.5">
+              存储: extensionSettings · 零 /setvar · 不被 LWB 快照
             </div>
           </div>
         </div>
@@ -124,9 +154,6 @@ function bindSettingsEvents() {
     saveSettings();
     toastr.success(`召回引擎切换为 ${$(this).val()}`);
   });
-  $('#mp_open_panel').on('click', () => openPanel());
-  $('#mp_open_api').on('click', () => openApiConfig());
-  $('#mp_open_monitor').on('click', () => openMonitor());
 }
 
 // ====== Event Hooks ======
@@ -142,30 +169,13 @@ function hookRecall() {
         const prev = localStorage.getItem('mp_active_chat');
         const curr = String(ctx.chatId ?? '');
         if (prev && prev !== curr) {
-          ['mp_memories_' + prev].forEach(k => {
-            try { localStorage.removeItem(k); } catch {}
-          });
+          try { localStorage.removeItem('mp_memories_' + prev); } catch {}
         }
         localStorage.setItem('mp_active_chat', curr);
       } catch {}
     });
   } catch (e) {
     console.warn('[MP] Could not hook events:', e);
-  }
-}
-
-function registerCommands() {
-  try {
-    const ctx = SillyTavern.getContext();
-    const parser = ctx.SlashCommandParser;
-    if (parser?.addCommandObject) {
-      // Use the new API if available
-      console.log('[MP] Registering slash commands via new API');
-    }
-    // Fallback: register via eventSource
-    ctx.eventSource.on('mp_open_panel', () => openPanel());
-  } catch (e) {
-    console.warn('[MP] Slash command registration:', e);
   }
 }
 
@@ -179,11 +189,18 @@ jQuery(async () => {
     ctx.extensionSettings[MODULE_NAME] = {};
   }
 
-  // Add settings panel
+  // Settings panel in extensions drawer
   const html = buildSettingsHtml();
   $('#extensions_settings2').append(html);
   bindSettingsEvents();
 
+  // Buttons above chat input (like original taskjs)
+  addChatBarButtons();
+
+  // Re-add buttons if chat area is rebuilt
+  ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, () => {
+    setTimeout(() => addChatBarButtons(), 500);
+  });
+
   hookRecall();
-  registerCommands();
 });

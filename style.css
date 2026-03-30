@@ -1,12 +1,41 @@
 /* MemoryPilot Extension */
+
+/* Chat bar buttons - same position as original taskjs buttons */
+.mp-chat-bar {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.mp-chat-btn {
+  background: rgba(128, 128, 128, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: var(--SmartThemeBodyColor, #ccc);
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.mp-chat-btn:hover {
+  background: rgba(128, 128, 128, 0.3);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.mp-chat-btn:active {
+  background: rgba(128, 128, 128, 0.45);
+}
+
+/* Settings panel in extensions drawer */
 .mp-settings-panel .inline-drawer-content {
   padding: 0 8px;
 }
-.mp-settings-panel .menu_button {
-  font-size: 12px;
-  padding: 4px 10px;
-}
+
 .mp-info {
-  opacity: 0.7;
+  opacity: 0.6;
   line-height: 1.5;
 }
