@@ -1,0 +1,12 @@
+{
+  "display_name": "MemoryPilot",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "MemoryPilot",
+  "version": "3.4.1",
+  "homePage": "",
+  "auto_update": true
+}
