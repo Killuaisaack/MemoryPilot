@@ -546,6 +546,28 @@ export async function runRecall() {
     markSeen(mem);
   }
 
+  // === Event association chain: linked recall (fill remaining slots) ===
+  const chainExtra = [];
+  const selectedIdSet = new Set(selected.map(m => m.id));
+  const pinnedIdSet = new Set(pinned.map(m => m.id));
+  for (const mem of selected) {
+    if (Array.isArray(mem.linkedIds)) {
+      for (const lid of mem.linkedIds) {
+        if (selectedIdSet.has(lid) || pinnedIdSet.has(lid)) continue;
+        const linked = memories.find(m => m.id === lid);
+        if (linked && !alreadySeen(linked)) {
+          chainExtra.push({ ...linked, _reason: '关联召回←' + (mem.event || mem.id) });
+          markSeen(linked);
+        }
+      }
+    }
+  }
+  // Chain recall only fills remaining slots
+  const chainSlots = Math.max(0, maxTriggered - selected.length);
+  if (chainSlots > 0 && chainExtra.length > 0) {
+    selected.push(...chainExtra.slice(0, chainSlots));
+  }
+
   const finalPinned = dedupeByFingerprint(pinned);
   const finalSelected = dedupeByFingerprint(selected).slice(0, maxTriggered);
 

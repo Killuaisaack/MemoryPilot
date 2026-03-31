@@ -22,8 +22,12 @@ function getSettings() {
     s._global = {
       recallVersion: 'v34',
       customPrompts: {},
+      autoSummarize: false,
+      autoSummarizeEvery: 20,
     };
   }
+  if (s._global.autoSummarize == null) s._global.autoSummarize = false;
+  if (s._global.autoSummarizeEvery == null) s._global.autoSummarizeEvery = 20;
   return s._global;
 }
 
@@ -141,6 +145,12 @@ function buildSettingsHtml() {
                 <option value="v32" ${settings.recallVersion === 'v32' ? 'selected' : ''}>v32 (经典)</option>
               </select>
             </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+              <label style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input type="checkbox" id="mp_auto_summarize" ${settings.autoSummarize ? 'checked' : ''}>自动总结</label>
+              <label style="min-width:40px;font-size:11px">每</label>
+              <input type="number" id="mp_auto_summarize_every" class="text_pole" style="width:60px" min="5" max="200" value="${settings.autoSummarizeEvery || 20}">
+              <span style="font-size:11px;color:#888">条消息</span>
+            </div>
             <div class="mp-info" style="font-size:11px;opacity:0.6;line-height:1.5">
               存储: extensionSettings · 零 /setvar · 不被 LWB 快照
             </div>
@@ -157,6 +167,17 @@ function bindSettingsEvents() {
     saveSettings();
     toastr.success(`召回引擎切换为 ${$(this).val()}`);
   });
+  $('#mp_auto_summarize').on('change', function() {
+    getSettings().autoSummarize = this.checked;
+    saveSettings();
+    toastr.success(this.checked ? '自动总结已开启' : '自动总结已关闭');
+  });
+  $('#mp_auto_summarize_every').on('change', function() {
+    const v = Math.max(5, Math.min(200, parseInt($(this).val()) || 20));
+    $(this).val(v);
+    getSettings().autoSummarizeEvery = v;
+    saveSettings();
+  });
 }
 
 // ====== Event Hooks ======
@@ -166,6 +187,31 @@ function hookRecall() {
     const ctx = SillyTavern.getContext();
     ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, async () => {
       try { await runRecall(); } catch (e) { console.error('[MP] Recall error:', e); }
+      // Auto-summarize
+      try {
+        const s = getSettings();
+        if (s.autoSummarize) {
+          const c = SillyTavern.getContext();
+          const chatLen = c?.chat?.length || 0;
+          const interval = s.autoSummarizeEvery || 20;
+          // Track last auto-summarize position
+          const store = c?.extensionSettings?.['MemoryPilot'];
+          const charId = c?.characterId;
+          const charObj = Number.isInteger(charId) ? c?.characters?.[charId] : null;
+          const charScope = String(charObj?.avatar ?? charObj?.name ?? c?.chatMetadata?.character_name ?? c?.name2 ?? '');
+          const ck = String(c.chatId ?? c.chatMetadata?.chat_file_name ?? 'default') + '::' + charScope;
+          if (store && store[ck]) {
+            const lastAutoFloor = store[ck]._lastAutoSummarizeFloor || 0;
+            if (chatLen - lastAutoFloor >= interval) {
+              store[ck]._lastAutoSummarizeFloor = chatLen;
+              saveSettings();
+              // Emit a custom event that the panel can listen for
+              console.log('[MP] Auto-summarize triggered at floor ' + chatLen);
+              window.dispatchEvent(new CustomEvent('mp_auto_summarize', { detail: { from: lastAutoFloor + 1, to: chatLen } }));
+            }
+          }
+        }
+      } catch (e) { console.warn('[MP] Auto-summarize check error:', e); }
     });
     ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, async () => {
       try { onChatChanged(); } catch {}
@@ -194,8 +240,90 @@ function hookRecall() {
 
 // ====== Init ======
 
+// ====== Activation Gate (SHA-256 hash verification) ======
+const MP_ACTIVATION_KEY = 'mp_activation_verified';
+
+// Only SHA-256 hashes are stored — original codes are NOT in source.
+// To add a new code: sha256(CODE.toUpperCase()) and add the hex hash here.
+const MP_VALID_HASHES = new Set([
+  '8daf8d6aed1de8bd58aa35f4fe6c7b50a04a4a5458044d27e554c5ce4c5e1a9f',
+  '8480d467d4dd07d3e1f03c1192c30c63ab261b027a929aee44f0ebd05c401e8a',
+  'b43dcdec36652e9d347bb66b2ac8d406b98b95fd9c78d5c41557535023e8ce23',
+]);
+
+async function sha256Hex(text) {
+  const data = new TextEncoder().encode(text);
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function isActivated() {
+  try {
+    const v = localStorage.getItem(MP_ACTIVATION_KEY);
+    return v === 'true';
+  } catch { return false; }
+}
+
+function showActivationDialog() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif';
+    overlay.innerHTML = `
+      <div style="background:#222327;border-radius:14px;padding:24px 28px;max-width:360px;width:90%;border:1px solid rgba(255,255,255,0.1);box-shadow:0 16px 50px rgba(0,0,0,0.6)">
+        <h3 style="color:#fff;margin:0 0 12px;font-size:16px">🧭 MemoryPilot 激活</h3>
+        <p style="color:#aaa;font-size:12px;margin:0 0 16px;line-height:1.5">请输入激活码以使用 MemoryPilot v3.5。<br>一次验证，永久有效（同浏览器）。</p>
+        <input id="mp_act_code" type="text" placeholder="请输入激活码…" style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.3);color:#eee;font-size:14px;box-sizing:border-box;margin-bottom:12px">
+        <div id="mp_act_err" style="color:#f87171;font-size:11px;margin-bottom:10px;display:none"></div>
+        <div style="display:flex;gap:8px">
+          <button id="mp_act_submit" style="flex:1;padding:10px;border-radius:8px;border:none;background:rgba(124,107,240,0.8);color:#fff;font-size:13px;cursor:pointer;font-weight:600">激活</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#mp_act_code');
+    const errEl = overlay.querySelector('#mp_act_err');
+    const submit = overlay.querySelector('#mp_act_submit');
+    let checking = false;
+    const doSubmit = async () => {
+      if (checking) return;
+      checking = true;
+      submit.textContent = '验证中…';
+      submit.style.opacity = '0.6';
+      try {
+        const code = (input.value || '').trim().toUpperCase();
+        if (!code) { throw new Error('请输入激活码'); }
+        const hash = await sha256Hex(code);
+        if (MP_VALID_HASHES.has(hash)) {
+          try { localStorage.setItem(MP_ACTIVATION_KEY, 'true'); } catch {}
+          overlay.remove();
+          resolve(true);
+          return;
+        }
+        throw new Error('激活码无效，请重新输入。');
+      } catch (e) {
+        errEl.style.display = '';
+        errEl.textContent = e.message || '验证失败';
+        input.style.borderColor = 'rgba(248,113,113,0.5)';
+      } finally {
+        checking = false;
+        submit.textContent = '激活';
+        submit.style.opacity = '';
+      }
+    };
+    submit.onclick = doSubmit;
+    input.onkeydown = (e) => { if (e.key === 'Enter') doSubmit(); };
+    input.focus();
+  });
+}
+
 jQuery(async () => {
   console.log(`[${MODULE_NAME}] Extension loaded (recall: ${getSettings().recallVersion})`);
+
+  // Activation check
+  if (!isActivated()) {
+    const ok = await showActivationDialog();
+    if (!ok) return;
+  }
 
   const ctx = SillyTavern.getContext();
   if (!ctx.extensionSettings[MODULE_NAME]) {

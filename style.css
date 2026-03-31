@@ -7,6 +7,11 @@
   padding: 4px 8px;
   justify-content: flex-start;
   flex-wrap: wrap;
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  max-height: 40px;
+  overflow: hidden;
 }
 
 .mp-chat-btn {

@@ -362,15 +362,20 @@ export function detectLegacyArtifacts() {
   try {
     const ns = ctx?.chatMetadata?.extensions?.[META_NS];
     if (ns && Object.keys(ns).length) {
-      report.hasLegacyMpMetadata = true;
-      report.mpMetadataSize = byteLen(ns);
-      report.keys.push('chat_metadata.extensions.MemoryPilot');
+      // Only flag as legacy if there are keys beyond the lightweight pointer
+      const pointerOnly = new Set(['version', 'chatKey', 'lastProcessedFloor', 'lastRecallTurn', 'storeMode']);
+      const nonPointerKeys = Object.keys(ns).filter(k => !pointerOnly.has(k));
+      if (nonPointerKeys.length) {
+        report.hasLegacyMpMetadata = true;
+        report.mpMetadataSize = byteLen(ns);
+        report.keys.push('chat_metadata.extensions.MemoryPilot (' + nonPointerKeys.join(', ') + ')');
+      }
     }
   } catch {}
 
   try {
     const vars = ctx?.chatMetadata?.variables || {};
-    const mpKeys = Object.keys(vars).filter(k => String(k).startsWith('mp_'));
+    const mpKeys = Object.keys(vars).filter(k => String(k).startsWith('mp_') && k !== 'mp_recall_pin' && k !== 'mp_recall_ctx');
     if (mpKeys.length) {
       report.hasLegacyMpVars = true;
       report.mpVarCount = mpKeys.length;
@@ -430,9 +435,15 @@ export async function cleanupLegacyArtifacts(options = {}) {
 
   try {
     if (opts.removeMpMetadata && ctx.chatMetadata?.extensions?.[META_NS]) {
-      delete ctx.chatMetadata.extensions[META_NS];
-      result.removedMpMetadata = true;
-      result.changed = true;
+      const ns = ctx.chatMetadata.extensions[META_NS];
+      const pointerOnly = new Set(['version', 'chatKey', 'lastProcessedFloor', 'lastRecallTurn', 'storeMode']);
+      const nonPointerKeys = Object.keys(ns).filter(k => !pointerOnly.has(k));
+      if (nonPointerKeys.length) {
+        // Remove only non-pointer keys, preserve lightweight pointer
+        for (const k of nonPointerKeys) { delete ns[k]; }
+        result.removedMpMetadata = true;
+        result.changed = true;
+      }
     }
   } catch {}
 
