@@ -194,7 +194,6 @@ function hookRecall() {
           const c = SillyTavern.getContext();
           const chatLen = c?.chat?.length || 0;
           const interval = s.autoSummarizeEvery || 20;
-          // Track last auto-summarize position
           const store = c?.extensionSettings?.['MemoryPilot'];
           const charId = c?.characterId;
           const charObj = Number.isInteger(charId) ? c?.characters?.[charId] : null;
@@ -205,9 +204,110 @@ function hookRecall() {
             if (chatLen - lastAutoFloor >= interval) {
               store[ck]._lastAutoSummarizeFloor = chatLen;
               saveSettings();
-              // Emit a custom event that the panel can listen for
-              console.log('[MP] Auto-summarize triggered at floor ' + chatLen);
-              window.dispatchEvent(new CustomEvent('mp_auto_summarize', { detail: { from: lastAutoFloor + 1, to: chatLen } }));
+              console.log('[MP] Auto-summarize triggered at floor ' + chatLen + ' (from ' + (lastAutoFloor + 1) + ')');
+              // Run the actual analysis in background
+              try {
+                // Read API config
+                const apiCfg = store[ck]?.mp_api_config || {};
+                const provider = apiCfg.provider || 'openai';
+                const model = apiCfg.model || '';
+                const key = apiCfg.key || '';
+                const rawBase = apiCfg.url || '';
+                if (!key || !model) {
+                  console.warn('[MP] Auto-summarize: API not configured');
+                } else {
+                  // Build prompt from the shared analysis prompt
+                  const promptTemplate = getCustomPrompt('analysis', null);
+                  if (promptTemplate) {
+                    const chat = c.chat || [];
+                    const fromIdx = Math.max(0, lastAutoFloor);
+                    const toIdx = Math.min(chatLen, chat.length);
+                    const uL = c.name1 || '用户', cL = c.name2 || '角色';
+                    const text = [];
+                    for (let i = fromIdx; i < toIdx; i++) {
+                      const m = chat[i];
+                      if (!m || !m.mes) continue;
+                      const body = String(m.mes).replace(/<\s*think\b[^>]*>[\s\S]*?<\s*\/\s*think\s*>/gi, ' ').trim();
+                      if (!body) continue;
+                      text.push('#' + (i + 1) + '[' + (m.is_user ? uL : (m.name || cL)) + ']' + body);
+                    }
+                    if (text.length >= 3) {
+                      const prompt = promptTemplate.replace('{{content}}', text.join('\n'));
+                      // Normalize base URL
+                      const base = provider === 'claude'
+                        ? String(rawBase || 'https://api.anthropic.com').replace(/\/+$/, '').replace(/\/v1\/messages$/i, '')
+                        : provider === 'gemini'
+                          ? String(rawBase || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '').replace(/\/models\/.*$/i, '')
+                          : String(rawBase || '').replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
+                      // Call LLM
+                      let url, headers, body;
+                      if (provider === 'claude') {
+                        url = base + '/v1/messages';
+                        headers = { 'x-api-key': key, 'anthropic-version': apiCfg.anthropicVersion || '2023-06-01', 'content-type': 'application/json' };
+                        body = JSON.stringify({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
+                      } else if (provider === 'gemini') {
+                        url = base + '/models/' + encodeURIComponent(model) + ':generateContent';
+                        headers = { 'x-goog-api-key': key, 'content-type': 'application/json' };
+                        body = JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 4096 } });
+                      } else {
+                        url = base + '/chat/completions';
+                        headers = { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' };
+                        body = JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: 4096 });
+                      }
+                      const res = await fetch(url, { method: 'POST', headers, body });
+                      if (res.ok) {
+                        const d = await res.json();
+                        let resultText = '';
+                        if (provider === 'claude') resultText = (d.content || []).filter(x => x?.type === 'text').map(x => x.text || '').join('\n');
+                        else if (provider === 'gemini') resultText = (d.candidates || []).flatMap(c => c?.content?.parts || []).map(p => p?.text || '').join('\n');
+                        else resultText = d.choices?.[0]?.message?.content || '';
+                        // Parse results and store as pending
+                        const parsed = [];
+                        const lines = resultText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                        for (const line of lines) {
+                          try {
+                            const raw = line.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+                            const o = JSON.parse(raw);
+                            if (o && o.event && o.summary) parsed.push(o);
+                          } catch {}
+                        }
+                        if (!parsed.length) {
+                          // Try brace matching
+                          let depth = 0, start = -1;
+                          for (let i = 0; i < resultText.length; i++) {
+                            if (resultText[i] === '{') { if (depth === 0) start = i; depth++; }
+                            else if (resultText[i] === '}') { depth--; if (depth === 0 && start >= 0) {
+                              try { const o = JSON.parse(resultText.slice(start, i + 1)); if (o?.event && o?.summary) parsed.push(o); } catch {}
+                              start = -1;
+                            }}
+                          }
+                        }
+                        if (parsed.length) {
+                          const gid = () => 'mp_' + Math.random().toString(36).slice(2, 10);
+                          const nms = parsed.map(o => ({
+                            ...o, id: gid(), timestamp: Date.now(),
+                            primaryKeywords: Array.isArray(o.primaryKeywords) ? o.primaryKeywords : (Array.isArray(o.keywords) ? o.keywords : []),
+                            secondaryKeywords: Array.isArray(o.secondaryKeywords) ? o.secondaryKeywords : [],
+                            entityKeywords: Array.isArray(o.entityKeywords) ? o.entityKeywords : [],
+                            source: 'auto',
+                            floorRange: Array.isArray(o.floorRange) && o.floorRange.length >= 2 ? o.floorRange : [fromIdx + 1, toIdx],
+                            timeLabel: o.timeLabel || '第' + (fromIdx + 1) + '-' + toIdx + '层',
+                          }));
+                          // Store as pending for user to confirm in panel
+                          try { localStorage.setItem('mp_pending_ops', JSON.stringify({ auto: { status: 'done', message: nms.length + '条自动提取', resultCount: nms.length, updatedAt: Date.now() } })); } catch {}
+                          try { localStorage.setItem('mp_pending_ops_results_auto', JSON.stringify(nms)); } catch {}
+                          toastr?.info?.('MemoryPilot 自动总结完成：提取 ' + nms.length + ' 条记忆，请在管理面板确认。');
+                          console.log('[MP] Auto-summarize done: ' + nms.length + ' memories extracted');
+                        } else {
+                          console.warn('[MP] Auto-summarize: LLM returned content but no valid JSON');
+                        }
+                      } else {
+                        console.warn('[MP] Auto-summarize API error: ' + res.status);
+                      }
+                    }
+                  }
+                }
+              } catch (autoErr) { console.warn('[MP] Auto-summarize LLM error:', autoErr); }
             }
           }
         }

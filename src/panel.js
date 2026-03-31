@@ -1374,7 +1374,14 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           <div class="fg"><label>时间值（分钟，可空）</label><input id="mp_ftv" placeholder="例如 657"></div>
           <div class="fg"><label>楼层范围（例如 120-138，可空）</label><input id="mp_ffr" placeholder="120-138"></div>
           <div class="fg"><label>自定义 α（可空，0~0.95）</label><input id="mp_fa" type="number" min="0" max="0.95" step="0.01" placeholder="为空则使用全局默认 0.72"></div>
-          <div class="fg"><label>关联事件 ID（逗号分隔，用于连带召回）</label><input id="mp_flink" placeholder="mp_xxxxxxxx, mp_yyyyyyyy"></div>
+          <div class="fg"><label>关联事件（连带召回）</label>
+            <div id="mp_flink_tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px"></div>
+            <div style="position:relative">
+              <input id="mp_flink_input" placeholder="输入事件名搜索已有记忆…" autocomplete="off">
+              <div id="mp_flink_dropdown" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:10;max-height:200px;overflow-y:auto;background:#1a1b1e;border:1px solid rgba(255,255,255,0.15);border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.4)"></div>
+            </div>
+            <input type="hidden" id="mp_flink" value="">
+          </div>
           <div class="fg"><label>摘要</label><textarea id="mp_fs"></textarea></div>
           <div class="fg"><label>优先级</label><select id="mp_fp"><option value="high">置顶（每轮注入）</option><option value="medium" selected>普通（关键词触发）</option><option value="low">低（保底槽位）</option></select></div>
           <div class="ht" style="margin-bottom:10px">participants / entityKeywords 不参与 recall；timeValue 请使用 RP 故事内时间，不要写现实消息时间戳</div>
@@ -1555,7 +1562,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const d=done.has(String(e.id));
       const fr=deriveFloorRangeFromXB(e);
       const frLabel=Array.isArray(fr)?` | #${fr[0]}-${fr[1]}`:'';
-      return `<div class="xi"><div class="mh"><span class="xt">${h(e.title)}</span><span class="ht">${h(e.type||'')} ${h(e.weight||'')}</span></div><div class="ht">${h(e.timeLabel||'')} | ${h(e.id)}${h(frLabel)}</div><div class="ms">${h(e.summary)}</div><div class="xp">${(e.participants||[]).map(p=>h(p)).join(', ')||'—'}</div><div class="ma">${d?`<span class="ht" style="margin-right:6px">已导入</span><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">改为置顶</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">改为普通</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">改为低</button><button class="btn bd1" onclick="window._mpD_xb('${h(e.id)}')">移除</button>`:`<button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">置顶导入</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">普通导入</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">低导入</button>`}</div></div>`;
+      return `<div class="xi" id="mp_xb_${h(e.id)}"><div class="mh"><span class="xt">${h(e.title)}</span><span class="ht">${h(e.type||'')} ${h(e.weight||'')}</span></div><div class="ht">${h(e.timeLabel||'')} | ${h(e.id)}${h(frLabel)}</div><div class="ms">${h(e.summary)}</div><div class="xp">${(e.participants||[]).map(p=>h(p)).join(', ')||'—'}</div><div class="ma">${Array.isArray(fr)?`<button class="btn" onclick="window._mpXCtx(${fr[0]},${fr[1]})">查看原文 #${fr[0]}-${fr[1]}</button>`:''}${d?`<span class="ht" style="margin-right:6px">已导入</span><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">改为置顶</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">改为普通</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">改为低</button><button class="btn bd1" onclick="window._mpD_xb('${h(e.id)}')">移除</button>`:`<button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">置顶导入</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">普通导入</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">低导入</button>`}</div></div>`;
     }).join('');
   };
 
@@ -1732,6 +1739,70 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   };
 
   renderList();renderXb();
+
+  // ===== Linked Event Autocomplete =====
+  const _linkState = { ids: [] };
+  const _linkRenderTags = () => {
+    const container = $('mp_flink_tags');
+    if (!container) return;
+    container.innerHTML = _linkState.ids.map(id => {
+      const mem = memories.find(m => m.id === id);
+      const label = mem ? mem.event : id;
+      return `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(124,107,240,0.15);color:#a5b4fc;padding:2px 6px;border-radius:4px;font-size:11px">${h(label)}<span style="cursor:pointer;color:#f87171;font-weight:bold" data-unlinkid="${h(id)}">&times;</span></span>`;
+    }).join('');
+    // Sync hidden field
+    if ($('mp_flink')) $('mp_flink').value = _linkState.ids.join(', ');
+    // Bind remove
+    container.querySelectorAll('[data-unlinkid]').forEach(el => {
+      el.onclick = () => {
+        _linkState.ids = _linkState.ids.filter(x => x !== el.getAttribute('data-unlinkid'));
+        _linkRenderTags();
+      };
+    });
+  };
+  const _linkSetIds = (ids) => {
+    _linkState.ids = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    _linkRenderTags();
+  };
+  const _linkAddId = (id) => {
+    if (!id || _linkState.ids.includes(id)) return;
+    _linkState.ids.push(id);
+    _linkRenderTags();
+  };
+  const _linkInput = $('mp_flink_input');
+  const _linkDrop = $('mp_flink_dropdown');
+  if (_linkInput && _linkDrop) {
+    _linkInput.oninput = () => {
+      const q = (_linkInput.value || '').trim().toLowerCase();
+      if (!q || q.length < 1) { _linkDrop.style.display = 'none'; return; }
+      const currentEditId = editId;
+      const candidates = memories.filter(m => {
+        if (m.id === currentEditId) return false;
+        if (_linkState.ids.includes(m.id)) return false;
+        return (m.event || '').toLowerCase().includes(q) || (m.id || '').toLowerCase().includes(q) || (m.summary || '').toLowerCase().includes(q);
+      }).slice(0, 8);
+      if (!candidates.length) { _linkDrop.style.display = 'none'; return; }
+      _linkDrop.style.display = '';
+      _linkDrop.innerHTML = candidates.map(m => {
+        const src = m.source === 'xb_event' ? ' [XB]' : m.source === 'batch' ? ' [BATCH]' : m.source === 'merged' ? ' [MERGED]' : '';
+        const flr = Array.isArray(m.floorRange) ? ' #' + m.floorRange[0] + '-' + m.floorRange[1] : '';
+        return `<div class="_lkopt" data-linkid="${h(m.id)}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px"><div style="color:#fff;font-weight:500">${h(m.event)}${src}</div><div style="color:#777;font-size:10px">${h(m.id)}${flr}</div></div>`;
+      }).join('');
+      _linkDrop.querySelectorAll('._lkopt').forEach(el => {
+        el.onmousedown = (e) => {
+          e.preventDefault();
+          const id = el.getAttribute('data-linkid');
+          _linkAddId(id);
+          _linkInput.value = '';
+          _linkDrop.style.display = 'none';
+        };
+        el.onmouseenter = () => { el.style.background = 'rgba(124,107,240,0.15)'; };
+        el.onmouseleave = () => { el.style.background = ''; };
+      });
+    };
+    _linkInput.onblur = () => { setTimeout(() => { _linkDrop.style.display = 'none'; }, 200); };
+    _linkInput.onfocus = () => { if (_linkInput.value.trim()) _linkInput.oninput(); };
+  }
   // Filter listeners
   root.querySelectorAll('[data-mf]').forEach(btn => {
     btn.onclick = () => {
@@ -1782,8 +1853,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
     await withLock('save_form', async () => {
       const alphaVal = alphaRaw === '' ? null : Number(alphaRaw);
-      const linkRaw=$('mp_flink')?.value||'';
-      const linkedIds=linkRaw.split(/[,，]/).map(k=>k.trim()).filter(Boolean);
+      const linkedIds = [..._linkState.ids];
       const patch={event:ev,primaryKeywords:pkw,secondaryKeywords:skw,entityKeywords:ekw,summary:sm,priority:pr,timeLabel:tl,timeValue:Number.isFinite(tv)?tv:null,floorRange:fr,alpha:Number.isFinite(alphaVal)?Math.max(0,Math.min(0.95,alphaVal)):null,linkedIds:linkedIds.length?linkedIds:undefined};
       if(editId){
         const old = memories.find(m=>m.id===editId);
@@ -1819,7 +1889,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ftv').value=Number.isFinite(Number(m.timeValue))?String(m.timeValue):'';
     $('mp_ffr').value=Array.isArray(m.floorRange)?`${m.floorRange[0]}-${m.floorRange[1]}`:'';
     $('mp_fa').value=Number.isFinite(Number(m.alpha))?String(m.alpha):'';
-    $('mp_flink').value=(m.linkedIds||[]).join(', ');
+    _linkSetIds(m.linkedIds || []);
+    if ($('mp_flink_input')) $('mp_flink_input').value = '';
     $('mp_fs').value=m.summary||'';
     $('mp_fp').value=m.priority||'medium';
     root.querySelector('.tab[data-t="add"]').click();
@@ -1856,7 +1927,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ftv').value='';
     $('mp_ffr').value='';
     $('mp_fa').value='';
-    $('mp_flink').value='';
+    _linkSetIds([]);
+    if ($('mp_flink_input')) $('mp_flink_input').value = '';
     $('mp_fs').value='';
     $('mp_fp').value='medium';
     if (keepTab) root.querySelector('.tab[data-t="add"]').click();
@@ -1872,7 +1944,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ftv').value=_editUndo.timeValue;
     $('mp_ffr').value=_editUndo.floorRange;
     $('mp_fa').value=_editUndo.alpha;
-    $('mp_flink').value=_editUndo.linkedIds||'';
+    _linkSetIds(_editUndo.linkedIds ? _editUndo.linkedIds.split(/[,，]/).map(s=>s.trim()).filter(Boolean) : []);
+    if ($('mp_flink_input')) $('mp_flink_input').value = '';
     $('mp_fs').value=_editUndo.summary;
     $('mp_fp').value=_editUndo.priority;
     toastr?.success?.('已撤回到编辑前状态');
@@ -1890,6 +1963,42 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   $('mp_xs').oninput=()=>{renderXb();const items=$('mp_xl')?.querySelectorAll('.xi');$('mp_xcount').textContent=items?.length?items.length+'条':'';};
   $('mp_xty').onchange=renderXb;$('mp_xwt').onchange=renderXb;
   $('mp_xjump').onclick=()=>{const first=$('mp_xl')?.querySelector('.xi');if(first){first.scrollIntoView({behavior:'smooth',block:'center'});first.style.outline='2px solid #7c6bf0';setTimeout(()=>{first.style.outline='';},1500);}};
+
+  // XB event -> view source context at floor range
+  window._mpXCtx=(startFloor, endFloor)=>{
+    // Switch to batch tab
+    root.querySelector('.tab[data-t="batch"]')?.click();
+    // Set floor range
+    const center = Math.round((startFloor + endFloor) / 2);
+    setTimeout(()=>{
+      showContextView(center);
+      // Expand context to cover the full range
+      _ctxT = Math.max(0, startFloor - 3);
+      _ctxB = Math.min(chat.length - 1, endFloor + 1);
+      const ls = _ctxS(_ctxT, _ctxB);
+      const container = $('mp_bctx');
+      if (container) {
+        const inner = container.querySelector('#_csa') || container;
+        inner.innerHTML = ls.map(l => _ctxH(l)).join('');
+        _bindCk();
+        // Scroll to center of the range
+        setTimeout(()=>{
+          const targetEl = inner.querySelector(`.ctxline .tiny`);
+          // Find the line matching startFloor
+          const lines = inner.querySelectorAll('.ctxline');
+          for (const line of lines) {
+            const ck = line.querySelector('._ck');
+            if (ck && Number(ck.getAttribute('data-floor')) === startFloor) {
+              line.scrollIntoView({behavior:'smooth', block:'center'});
+              line.style.outline='2px solid #7c6bf0';
+              setTimeout(()=>{line.style.outline='';},2000);
+              break;
+            }
+          }
+        }, 50);
+      }
+    }, 100);
+  };
 
   window._mpXI=async(eid,prio)=>{
     const e=xbEvents.find(x=>String(x.id)===String(eid));if(!e)return;
@@ -2417,6 +2526,19 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           const results = loadPendingResults('batch') || op.results || [];
           if (results.length) renderBatchResults(results);
           else toastr?.warning?.('结果数据已过期（页面曾刷新），请重新分析');
+        });
+      }
+    }
+    // Auto-summarize results banner
+    const autoId = renderPendingBanner(batchPage, 'auto', '自动总结');
+    if (autoId) {
+      const ops = checkStaleOps(loadPendingOps());
+      const op = ops.auto;
+      if (op && op.status === 'done' && (op.resultCount > 0)) {
+        document.getElementById(autoId + '_view')?.addEventListener('click', () => {
+          const results = loadPendingResults('auto') || [];
+          if (results.length) renderBatchResults(results);
+          else toastr?.warning?.('结果数据已过期，请重新分析');
         });
       }
     }
