@@ -1508,6 +1508,18 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       filtered = filtered.filter(m => (m.event||'').toLowerCase().includes(q) || (m.summary||'').toLowerCase().includes(q) || (m.primaryKeywords||[]).join(' ').toLowerCase().includes(q));
     }
     if(!filtered.length){c.innerHTML='<div class="emp">无匹配记忆（共 '+memories.length+' 条）</div>';return;}
+    // Build bidirectional link map for display
+    const _biLinkMap = new Map();
+    for (const m of memories) {
+      if (Array.isArray(m.linkedIds)) {
+        for (const lid of m.linkedIds) {
+          if (!_biLinkMap.has(m.id)) _biLinkMap.set(m.id, new Set());
+          _biLinkMap.get(m.id).add(lid);
+          if (!_biLinkMap.has(lid)) _biLinkMap.set(lid, new Set());
+          _biLinkMap.get(lid).add(m.id);
+        }
+      }
+    }
     // Sort
     if (_listSort !== 'default') {
       filtered = [...filtered];
@@ -1531,7 +1543,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const canRebuild = true;
       const pick = `<label class="ht" style="display:flex;align-items:center;gap:6px"><input type="checkbox" class="mp_pick" data-id="${h(m.id)}" ${selectedIds.has(m.id)?'checked':''}>选择</label>`;
       const rebuildBtn = `<button class="btn bp1" onclick="window._mpKR('${m.id}')">${kwRunning && kwRunningId===m.id ? '中止重构' : '优化关键词'}</button>`;
-      const linkBadge = (m.linkedIds||[]).length ? '<span class="kw" style="background:rgba(251,191,36,0.15);color:#fbbf24">🔗'+m.linkedIds.length+'</span>' : '';
+      const biLinks = _biLinkMap.get(m.id);
+      const linkCount = biLinks ? biLinks.size : 0;
+      const linkBadge = linkCount ? '<span class="kw" style="background:rgba(251,191,36,0.15);color:#fbbf24">🔗'+linkCount+'</span>' : '';
       return `<div class="mi"><div class="mh"><span class="me">${pin}${h(m.event)}</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${pick}<span class="bp ${pc}">${pl}</span></div></div>${time}<div class="ms">${h(m.summary)}</div><div class="kr">${src}${linkBadge}${pkw}${skw}${ent}</div><div class="ma">${rebuildBtn}<button class="btn" onclick="window._mpE('${m.id}')">编辑</button><button class="btn bd1" onclick="window._mpD('${m.id}')">删除</button></div></div>`;
     }).join('');
     $('mp_sel_info').textContent = `已选 ${selectedIds.size} 条记忆`;
@@ -1855,13 +1869,28 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const alphaVal = alphaRaw === '' ? null : Number(alphaRaw);
       const linkedIds = [..._linkState.ids];
       const patch={event:ev,primaryKeywords:pkw,secondaryKeywords:skw,entityKeywords:ekw,summary:sm,priority:pr,timeLabel:tl,timeValue:Number.isFinite(tv)?tv:null,floorRange:fr,alpha:Number.isFinite(alphaVal)?Math.max(0,Math.min(0.95,alphaVal)):null,linkedIds:linkedIds.length?linkedIds:undefined};
+      const currentId = editId || gid();
       if(editId){
         const old = memories.find(m=>m.id===editId);
         const next = { ...(old || {}), ...patch, id: editId };
         memories = upsertMemory(memories, next);
         editId=null;
       } else {
-        memories = upsertMemory(memories, {id:gid(),...patch,source:'manual',timestamp:Date.now()});
+        memories = upsertMemory(memories, {id:currentId,...patch,source:'manual',timestamp:Date.now()});
+      }
+      // Sync bidirectional links: ensure each linked target also links back
+      if (linkedIds.length) {
+        for (const lid of linkedIds) {
+          const target = memories.find(m => m.id === lid);
+          if (target) {
+            const targetLinks = new Set(target.linkedIds || []);
+            if (!targetLinks.has(currentId)) {
+              targetLinks.add(currentId);
+              target.linkedIds = [...targetLinks];
+              memories = upsertMemory(memories, target);
+            }
+          }
+        }
       }
       await saveMem(memories);
       renderList();
@@ -1890,6 +1919,12 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ffr').value=Array.isArray(m.floorRange)?`${m.floorRange[0]}-${m.floorRange[1]}`:'';
     $('mp_fa').value=Number.isFinite(Number(m.alpha))?String(m.alpha):'';
     _linkSetIds(m.linkedIds || []);
+    // Also show reverse links (other memories that link to this one)
+    for (const om of memories) {
+      if (om.id !== m.id && Array.isArray(om.linkedIds) && om.linkedIds.includes(m.id)) {
+        _linkAddId(om.id);
+      }
+    }
     if ($('mp_flink_input')) $('mp_flink_input').value = '';
     $('mp_fs').value=m.summary||'';
     $('mp_fp').value=m.priority||'medium';
@@ -1962,17 +1997,28 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   $('mp_xs').oninput=()=>{renderXb();const items=$('mp_xl')?.querySelectorAll('.xi');$('mp_xcount').textContent=items?.length?items.length+'条':'';};
   $('mp_xty').onchange=renderXb;$('mp_xwt').onchange=renderXb;
-  $('mp_xjump').onclick=()=>{const first=$('mp_xl')?.querySelector('.xi');if(first){first.scrollIntoView({behavior:'smooth',block:'center'});first.style.outline='2px solid #7c6bf0';setTimeout(()=>{first.style.outline='';},1500);}};
+  // XB jump: scroll the bd (scrollable body) so that the first matched XB event is in view
+  $('mp_xjump').onclick=()=>{
+    const xl=$('mp_xl'); if(!xl) return;
+    const first=xl.querySelector('.xi');
+    if(!first){toastr?.warning?.('无匹配事件');return;}
+    // The scrollable container is .bd
+    const bd=root.querySelector('.bd');
+    if(bd){
+      const bdRect=bd.getBoundingClientRect();
+      const elRect=first.getBoundingClientRect();
+      bd.scrollTop += elRect.top - bdRect.top - 60;
+    }
+    first.style.outline='2px solid #7c6bf0';first.style.transition='outline 0.3s';
+    setTimeout(()=>{first.style.outline='';},1500);
+  };
 
-  // XB event -> view source context at floor range
+  // XB event -> view source context at floor range (switch to batch tab)
   window._mpXCtx=(startFloor, endFloor)=>{
-    // Switch to batch tab
     root.querySelector('.tab[data-t="batch"]')?.click();
-    // Set floor range
     const center = Math.round((startFloor + endFloor) / 2);
     setTimeout(()=>{
       showContextView(center);
-      // Expand context to cover the full range
       _ctxT = Math.max(0, startFloor - 3);
       _ctxB = Math.min(chat.length - 1, endFloor + 1);
       const ls = _ctxS(_ctxT, _ctxB);
@@ -1981,10 +2027,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         const inner = container.querySelector('#_csa') || container;
         inner.innerHTML = ls.map(l => _ctxH(l)).join('');
         _bindCk();
-        // Scroll to center of the range
         setTimeout(()=>{
-          const targetEl = inner.querySelector(`.ctxline .tiny`);
-          // Find the line matching startFloor
           const lines = inner.querySelectorAll('.ctxline');
           for (const line of lines) {
             const ck = line.querySelector('._ck');

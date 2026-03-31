@@ -547,18 +547,32 @@ export async function runRecall() {
   }
 
   // === Event association chain: linked recall (fill remaining slots) ===
+  // Build bidirectional link map
+  const linkMap = new Map(); // id -> Set of linked ids
+  for (const mem of memories) {
+    if (Array.isArray(mem.linkedIds) && mem.linkedIds.length) {
+      for (const lid of mem.linkedIds) {
+        // Forward: mem -> lid
+        if (!linkMap.has(mem.id)) linkMap.set(mem.id, new Set());
+        linkMap.get(mem.id).add(lid);
+        // Reverse: lid -> mem (bidirectional)
+        if (!linkMap.has(lid)) linkMap.set(lid, new Set());
+        linkMap.get(lid).add(mem.id);
+      }
+    }
+  }
   const chainExtra = [];
   const selectedIdSet = new Set(selected.map(m => m.id));
   const pinnedIdSet = new Set(pinned.map(m => m.id));
   for (const mem of selected) {
-    if (Array.isArray(mem.linkedIds)) {
-      for (const lid of mem.linkedIds) {
-        if (selectedIdSet.has(lid) || pinnedIdSet.has(lid)) continue;
-        const linked = memories.find(m => m.id === lid);
-        if (linked && !alreadySeen(linked)) {
-          chainExtra.push({ ...linked, _reason: '关联召回←' + (mem.event || mem.id) });
-          markSeen(linked);
-        }
+    const allLinked = linkMap.get(mem.id);
+    if (!allLinked || !allLinked.size) continue;
+    for (const lid of allLinked) {
+      if (selectedIdSet.has(lid) || pinnedIdSet.has(lid)) continue;
+      const linked = memories.find(m => m.id === lid);
+      if (linked && !alreadySeen(linked)) {
+        chainExtra.push({ ...linked, _reason: '关联召回←' + (mem.event || mem.id) });
+        markSeen(linked);
       }
     }
   }

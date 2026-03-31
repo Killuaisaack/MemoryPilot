@@ -151,6 +151,10 @@ function buildSettingsHtml() {
               <input type="number" id="mp_auto_summarize_every" class="text_pole" style="width:60px" min="5" max="200" value="${settings.autoSummarizeEvery || 20}">
               <span style="font-size:11px;color:#888">条消息</span>
             </div>
+            <div style="font-size:10px;color:#777;line-height:1.4;margin-top:4px;padding-left:2px">
+              共用「MP API配置」的接口 + 「分析」页的总结 Prompt。<br>
+              结果不会自动写入，需在管理面板「分析」页顶部横幅确认。
+            </div>
             <div class="mp-info" style="font-size:11px;opacity:0.6;line-height:1.5">
               存储: extensionSettings · 零 /setvar · 不被 LWB 快照
             </div>
