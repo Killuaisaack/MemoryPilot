@@ -200,6 +200,15 @@ export async function openPanel() {
   const loadBlacklist = ()=>{try{const r=localStorage.getItem(BK);const a=r?JSON.parse(r):[];return Array.isArray(a)?a:[];}catch{}return[];};
   const saveBlacklist = async arr => { await pushJson(BK, Array.isArray(arr)?arr:[]); };
 
+  // Event Groups (must be defined early — used by renderList, simulateRecall, etc.)
+  const GK = 'mp_event_groups';
+  const loadGroups = () => { try { const store = _getStore(); if (store && store[GK]) return store[GK]; } catch {} return {}; };
+  const saveGroups = async (groups) => { const store = _getStore(); if (store) { store[GK] = groups; _saveDebounced(); } };
+  const getMemGroups = (memId) => {
+    const groups = loadGroups();
+    return Object.keys(groups).filter(g => (groups[g]||[]).includes(memId));
+  };
+
   const DEF_CLEANER = {
     blockTags: ['think','details'],
     linePrefixes: ['affinity_change:','mood_change:','state_update:'],
@@ -1771,12 +1780,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   renderList();renderXb();
 
   // ===== Event Group Management =====
-  const GK = 'mp_event_groups';
-  const loadGroups = () => { try { const store = _getStore(); if (store && store[GK]) return store[GK]; } catch {} return {}; };
-  const saveGroups = async (groups) => { const store = _getStore(); if (store) { store[GK] = groups; _saveDebounced(); } };
-  // groups: { groupName: [memId1, memId2, ...], ... }
+  // GK, loadGroups, saveGroups, getMemGroups defined above (line ~203)
 
-  const _grpState = { names: [] }; // groups this memory belongs to
+  const _grpState = { names: [] };
   const _grpRenderTags = () => {
     const container = $('mp_fgrp_tags'); if (!container) return;
     container.innerHTML = _grpState.names.map(g =>
@@ -1788,12 +1794,6 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   };
   const _grpSetNames = (names) => { _grpState.names = [...new Set((names||[]).filter(Boolean))]; _grpRenderTags(); };
   const _grpAddName = (name) => { const n = (name||'').trim(); if (!n || _grpState.names.includes(n)) return; _grpState.names.push(n); _grpRenderTags(); };
-
-  // Get all group names this memory belongs to
-  const getMemGroups = (memId) => {
-    const groups = loadGroups();
-    return Object.keys(groups).filter(g => (groups[g]||[]).includes(memId));
-  };
 
   // Suggest: show existing groups + auto-suggest based on similar keywords/floor
   const _grpRenderSuggest = (memId) => {
