@@ -1377,6 +1377,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
             <button class="btn" id="mp_sel_xbnr">选择未重构XB</button>
             <button class="btn" id="mp_sel_none">清空选择</button>
             <button class="btn bp1" id="mp_rebuild_sel">批量重构关键词</button>
+            <button class="btn" id="mp_grp_create" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.3);color:#fbbf24">建组</button>
+            <button class="btn" id="mp_grp_addto" style="background:rgba(251,191,36,0.1);border-color:rgba(251,191,36,0.2);color:#fbbf24">加入已有组</button>
           </div>
           <div class="ht" id="mp_sel_info" style="margin-bottom:6px">已选 0 条记忆</div><div style="display:flex;gap:5px;margin-bottom:8px;flex-wrap:wrap"><button class="btn bp1" id="mp_merge_sel">合并选中事件</button><select id="mp_merge_kw_mode" style="padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);background:rgba(0,0,0,0.3);color:#ddd;font-size:11px"><option value="default">关键词：默认合并</option><option value="ai">关键词：AI重构</option></select><label style="display:flex;align-items:center;gap:4px;color:#aaa;font-size:11px;white-space:nowrap"><input type="checkbox" id="mp_merge_ctx" checked>关联原文</label></div><div class="opline" id="mp_merge_status"></div><details class="det" style="margin-bottom:8px"><summary>事件合并 Prompt（可编辑，共用分析 API）</summary><textarea id="mp_mpr" style="width:100%;min-height:120px;margin-top:6px">${h(loadMergePrompt())}</textarea><div style="display:flex;gap:5px;margin-top:5px"><button class="btn" id="mp_mps">保存</button><button class="btn bd1" id="mp_mpd">恢复默认</button></div><div class="ht" style="margin-top:6px">合并选中记忆时使用。{{memories}} 替换为记忆信息，{{context}} 替换为楼层原文。</div></details><div class="opline" id="mp_kw_status"></div>
           <details class="det" style="margin-bottom:8px">
@@ -1408,13 +1410,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           <div class="fg"><label>时间值（分钟，可空）</label><input id="mp_ftv" placeholder="例如 657"></div>
           <div class="fg"><label>楼层范围（例如 120-138，可空）</label><input id="mp_ffr" placeholder="120-138"></div>
           <div class="fg"><label>自定义 α（可空，0~0.95）</label><input id="mp_fa" type="number" min="0" max="0.95" step="0.01" placeholder="为空则使用全局默认 0.72"></div>
-          <div class="fg"><label>事件组（同组事件连带召回）</label>
-            <div id="mp_fgrp_tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px"></div>
-            <div style="display:flex;gap:5px">
-              <input id="mp_fgrp_input" placeholder="输入组名或新建…" style="flex:1" autocomplete="off">
-              <button class="btn" id="mp_fgrp_add" style="white-space:nowrap">添加/新建</button>
-            </div>
-            <div id="mp_fgrp_suggest" style="margin-top:6px"></div>
+          <div class="fg"><label>所属事件组</label>
+            <div id="mp_fgrp_tags" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px"></div>
+            <div class="ht">在「记忆列表」中勾选多条记忆 → 点「建组」来管理事件组</div>
           </div>
           <div class="fg"><label>摘要</label><textarea id="mp_fs"></textarea></div>
           <div class="fg"><label>优先级</label><select id="mp_fp"><option value="high">置顶（每轮注入）</option><option value="medium" selected>普通（关键词触发）</option><option value="low">低（保底槽位）</option></select></div>
@@ -1428,6 +1426,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
             <select id="mp_xty"><option value="">类型</option><option>相遇</option><option>冲突</option><option>揭示</option><option>抉择</option><option>羁绊</option><option>转变</option><option>收束</option><option>日常</option></select>
             <select id="mp_xwt"><option value="">权重</option><option>核心</option><option>主线</option><option>转折</option><option>点睛</option><option>氛围</option></select>
             <span class="ht" id="mp_xcount"></span>
+            <button class="btn" id="mp_xtop" style="font-size:10px;padding:3px 8px" title="回到顶部">↑ 顶部</button>
           </div>
           <div id="mp_xl" style="scroll-behavior:smooth"></div>
         </div>
@@ -1468,8 +1467,12 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           <div class="fg" style="margin-top:12px"><label>最大召回条数（Top N）</label><input id="mp_rmaxn" type="number" min="1" max="20" value="${h(String(loadRecallCfg().maxRecall||6))}"></div>
           <div class="fg" style="margin-top:12px"><label>上下文窗口（匹配最近 N 条）</label><input id="mp_rctxwin" type="number" min="3" max="30" value="${h(String(loadRecallCfg().contextWindow||8))}"></div>
           <div class="fg" style="margin-top:12px"><label>粘性保持（命中后维持 N 轮）</label><input id="mp_rsticky" type="number" min="0" max="20" value="${h(String(loadRecallCfg().stickyTurns??5))}"></div>
-          <div class="fg" style="margin-top:12px">
-            <label style="display:flex;align-items:center;gap:6px;color:#ccc"><input type="checkbox" id="mp_rgrp" ${loadRecallCfg().groupRecall!==false?'checked':''}>启用事件组连带召回（已召回事件所在组的其他成员按评分补位）</label>
+          <div style="margin-top:14px;padding:10px 12px;background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.15);border-radius:8px;margin-bottom:10px">
+            <label style="display:flex;align-items:center;gap:8px;color:#fbbf24;font-size:12px;font-weight:500;cursor:pointer">
+              <input type="checkbox" id="mp_rgrp" ${loadRecallCfg().groupRecall!==false?'checked':''} style="width:16px;height:16px">
+              📎 事件组连带召回
+            </label>
+            <div class="ht" style="margin-top:4px;color:#a3a3a3">开启后，当某条记忆被关键词召回时，同组的其他记忆会按评分排序填充剩余槽位。<br>在「记忆列表」中勾选多条记忆 → 点「建组」来创建事件组。</div>
           </div>
           <div class="ht" style="margin-bottom:10px">正式召回与正式写入都按每 N 回合执行；匹配窗口参考最近 N 回合原文。规则为：主关键词至少命中 1 个才入候选；若配置了门控关键词，则还必须至少命中 1 个门控关键词；通过后再进入距离衰减概率。这里的 α 是默认基准，单条记忆可在编辑页自定义覆盖。</div>
           <button class="btn bp1" id="mp_rssv" style="width:100%;padding:9px;font-size:13px;margin-bottom:14px">保存召回设置</button>
@@ -1601,7 +1604,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const d=done.has(String(e.id));
       const fr=deriveFloorRangeFromXB(e);
       const frLabel=Array.isArray(fr)?` | #${fr[0]}-${fr[1]}`:'';
-      return `<div class="xi" id="mp_xb_${h(e.id)}"><div class="mh"><span class="xt">${h(e.title)}</span><span class="ht">${h(e.type||'')} ${h(e.weight||'')}</span></div><div class="ht">${h(e.timeLabel||'')} | ${h(e.id)}${h(frLabel)}</div><div class="ms">${h(e.summary)}</div><div class="xp">${(e.participants||[]).map(p=>h(p)).join(', ')||'—'}</div><div class="ma"><button class="btn" onclick="window._mpXLocate('${h(e.id)}')">定位</button>${d?`<span class="ht" style="margin-right:6px">已导入</span><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">改为置顶</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">改为普通</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">改为低</button><button class="btn bd1" onclick="window._mpD_xb('${h(e.id)}')">移除</button>`:`<button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">置顶导入</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">普通导入</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">低导入</button>`}</div></div>`;
+      return `<div class="xi" id="mp_xb_${h(e.id)}"><div class="mh"><span class="xt" style="cursor:pointer;text-decoration:underline dotted rgba(196,181,253,0.4)" onclick="window._mpXLocate('${h(e.id)}')" title="点击定位到全量列表中的位置">${h(e.title)}</span><span class="ht">${h(e.type||'')} ${h(e.weight||'')}</span></div><div class="ht">${h(e.timeLabel||'')} | ${h(e.id)}${h(frLabel)}</div><div class="ms">${h(e.summary)}</div><div class="xp">${(e.participants||[]).map(p=>h(p)).join(', ')||'—'}</div><div class="ma">${d?`<span class="ht" style="margin-right:6px">已导入</span><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">改为置顶</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">改为普通</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">改为低</button><button class="btn bd1" onclick="window._mpD_xb('${h(e.id)}')">移除</button>`:`<button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">置顶导入</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">普通导入</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">低导入</button>`}</div></div>`;
     }).join('');
   };
 
@@ -1795,53 +1798,38 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   const _grpSetNames = (names) => { _grpState.names = [...new Set((names||[]).filter(Boolean))]; _grpRenderTags(); };
   const _grpAddName = (name) => { const n = (name||'').trim(); if (!n || _grpState.names.includes(n)) return; _grpState.names.push(n); _grpRenderTags(); };
 
-  // Suggest: show existing groups + auto-suggest based on similar keywords/floor
-  const _grpRenderSuggest = (memId) => {
-    const el = $('mp_fgrp_suggest'); if (!el) return;
+  // Group create/addto buttons (on list page)
+  $('mp_grp_create')?.addEventListener('click', async () => {
+    const ids = [...selectedIds];
+    if (ids.length < 2) { toastr?.warning?.('请至少选择 2 条记忆来建组'); return; }
     const groups = loadGroups();
-    const allNames = Object.keys(groups);
-    if (!allNames.length && !memId) { el.innerHTML = '<span class="ht">暂无事件组</span>'; return; }
-    // Auto-suggest: find memories with overlapping keywords/floor
-    let suggested = [];
-    if (memId) {
-      const mem = memories.find(m => m.id === memId);
-      if (mem) {
-        const myKws = new Set([...(mem.primaryKeywords||[]), ...(mem.secondaryKeywords||[])].map(k => k.toLowerCase()));
-        const myFloor = mem.floorRange;
-        for (const m of memories) {
-          if (m.id === memId) continue;
-          const theirKws = [...(m.primaryKeywords||[]), ...(m.secondaryKeywords||[])].map(k => k.toLowerCase());
-          const kwOverlap = theirKws.filter(k => myKws.has(k)).length;
-          const floorClose = myFloor && m.floorRange ? Math.abs(myFloor[0] - m.floorRange[0]) < 30 : false;
-          if (kwOverlap >= 2 || floorClose) {
-            const theirGroups = getMemGroups(m.id);
-            for (const g of theirGroups) { if (!suggested.includes(g) && !_grpState.names.includes(g)) suggested.push(g); }
-          }
-        }
-      }
-    }
-    const existingBtns = allNames.filter(g => !_grpState.names.includes(g)).slice(0, 10).map(g =>
-      `<button class="btn _grp_ex" data-gn="${h(g)}" style="font-size:10px;padding:2px 8px">${h(g)} (${(groups[g]||[]).length})</button>`
-    ).join('');
-    const suggestBtns = suggested.slice(0, 5).map(g =>
-      `<button class="btn bp1 _grp_sg" data-gn="${h(g)}" style="font-size:10px;padding:2px 8px">推荐: ${h(g)}</button>`
-    ).join('');
-    el.innerHTML = (suggestBtns ? '<div style="margin-bottom:4px">' + suggestBtns + '</div>' : '') +
-      (existingBtns ? '<div class="ht" style="margin-bottom:2px">已有组：</div>' + existingBtns : '<span class="ht">暂无事件组</span>');
-    el.querySelectorAll('._grp_ex, ._grp_sg').forEach(btn => {
-      btn.onclick = () => { _grpAddName(btn.getAttribute('data-gn')); _grpRenderSuggest(memId); };
-    });
-  };
-
-  $('mp_fgrp_add')?.addEventListener('click', () => {
-    const v = $('mp_fgrp_input')?.value?.trim();
-    if (!v) { toastr?.warning?.('请输入组名'); return; }
-    _grpAddName(v);
-    $('mp_fgrp_input').value = '';
-    _grpRenderSuggest(editId);
+    const gid_grp = 'G' + Math.random().toString(36).slice(2,8).toUpperCase();
+    const name = prompt('事件组名称（可选，留空自动生成）：', gid_grp);
+    if (name === null) return;
+    const gn = (name || '').trim() || gid_grp;
+    if (groups[gn]) { toastr?.warning?.('组名已存在：' + gn); return; }
+    groups[gn] = ids;
+    await saveGroups(groups);
+    selectedIds = new Set();
+    renderList();
+    toastr?.success?.('已创建事件组「' + gn + '」，包含 ' + ids.length + ' 条记忆');
   });
-  $('mp_fgrp_input')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); $('mp_fgrp_add')?.click(); }
+  $('mp_grp_addto')?.addEventListener('click', async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) { toastr?.warning?.('请先勾选记忆'); return; }
+    const groups = loadGroups();
+    const names = Object.keys(groups);
+    if (!names.length) { toastr?.warning?.('暂无事件组，请先建组'); return; }
+    const choice = prompt('输入要加入的事件组名称：\n\n已有组：' + names.map(g => g + '(' + groups[g].length + ')').join(', '));
+    if (!choice || !choice.trim()) return;
+    const gn = choice.trim();
+    if (!groups[gn]) { groups[gn] = []; }
+    let added = 0;
+    for (const id of ids) { if (!groups[gn].includes(id)) { groups[gn].push(id); added++; } }
+    await saveGroups(groups);
+    selectedIds = new Set();
+    renderList();
+    toastr?.success?.('已将 ' + added + ' 条记忆加入事件组「' + gn + '」');
   });
   // Filter listeners
   root.querySelectorAll('[data-mf]').forEach(btn => {
@@ -1943,8 +1931,6 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ffr').value=Array.isArray(m.floorRange)?`${m.floorRange[0]}-${m.floorRange[1]}`:'';
     $('mp_fa').value=Number.isFinite(Number(m.alpha))?String(m.alpha):'';
     _grpSetNames(getMemGroups(m.id));
-    if ($('mp_fgrp_input')) $('mp_fgrp_input').value = '';
-    _grpRenderSuggest(m.id);
     $('mp_fs').value=m.summary||'';
     $('mp_fp').value=m.priority||'medium';
     root.querySelector('.tab[data-t="add"]').click();
@@ -1982,7 +1968,6 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ffr').value='';
     $('mp_fa').value='';
     _grpSetNames([]);
-    if ($('mp_fgrp_input')) $('mp_fgrp_input').value = '';
     $('mp_fs').value='';
     $('mp_fp').value='medium';
     if (keepTab) root.querySelector('.tab[data-t="add"]').click();
@@ -1999,7 +1984,6 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ffr').value=_editUndo.floorRange;
     $('mp_fa').value=_editUndo.alpha;
     _grpSetNames(_editUndo.groupNames || []);
-    if ($('mp_fgrp_input')) $('mp_fgrp_input').value = '';
     $('mp_fs').value=_editUndo.summary;
     $('mp_fp').value=_editUndo.priority;
     toastr?.success?.('已撤回到编辑前状态');
@@ -2016,6 +2000,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   $('mp_xs').oninput=()=>{renderXb();const items=$('mp_xl')?.querySelectorAll('.xi');$('mp_xcount').textContent=items?.length?items.length+'条':'';};
   $('mp_xty').onchange=renderXb;$('mp_xwt').onchange=renderXb;
+  $('mp_xtop').onclick=()=>{const bd=root.querySelector('.bd');if(bd)bd.scrollTop=0;};
 
   // XB locate: clear search, show full list, scroll to target event
   window._mpXLocate=(eid)=>{
