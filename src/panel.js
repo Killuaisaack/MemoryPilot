@@ -225,7 +225,7 @@ export async function openPanel() {
     await pushJson(CK, cleanerCfg);
   };
 
-  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6 };
+  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6, groupRecall: true };
   const normalizeRecallSettings = (cfg) => {
     const src = cfg && typeof cfg === 'object' ? cfg : {};
     const num = (v, d) => Number.isFinite(Number(v)) ? Number(v) : d;
@@ -235,7 +235,8 @@ export async function openPanel() {
       alpha: clamp(num(src.alpha, DEF_RECALL_SETTINGS.alpha), 0, 0.95),
       stickyTurns: clamp(Math.round(num(src.stickyTurns, DEF_RECALL_SETTINGS.stickyTurns)), 0, 20),
       contextWindow: clamp(Math.round(num(src.contextWindow, DEF_RECALL_SETTINGS.contextWindow)), 3, 30),
-      maxRecall: clamp(Math.round(num(src.maxRecall, DEF_RECALL_SETTINGS.maxRecall)), 1, 20)
+      maxRecall: clamp(Math.round(num(src.maxRecall, DEF_RECALL_SETTINGS.maxRecall)), 1, 20),
+      groupRecall: src.groupRecall !== false
     };
   };
   let recallCfg = normalizeRecallSettings(await pullJson(RK, DEF_RECALL_SETTINGS));
@@ -994,6 +995,30 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     }
 
     selected.sort((a,b)=>b._score-a._score);
+    // Group recall simulation
+    if (recallCfgLocal.groupRecall !== false) {
+      const grps = loadGroups();
+      const selSet = new Set(selected.map(m=>m.id));
+      const pinSet = new Set(pinned.map(m=>m.id));
+      const activeGrps = new Set();
+      for (const [gn, members] of Object.entries(grps)) {
+        if ((members||[]).some(mid => selSet.has(mid) || pinSet.has(mid))) activeGrps.add(gn);
+      }
+      const grpCand = [];
+      for (const gn of activeGrps) {
+        for (const mid of (grps[gn]||[])) {
+          if (selSet.has(mid) || pinSet.has(mid)) continue;
+          const mem = memories.find(m => m.id === mid);
+          if (!mem || alreadySeen(mem)) continue;
+          const scored = primary.find(p => p.id === mid);
+          grpCand.push({ ...mem, _score: scored?scored._score:0.01, _reason: '事件组['+gn+']补位' });
+          markSeen(mem);
+        }
+      }
+      grpCand.sort((a,b)=>b._score-a._score);
+      const grpSlots = Math.max(0, maxTriggered - selected.length);
+      if (grpSlots > 0) selected.push(...grpCand.slice(0, grpSlots));
+    }
     return { pinned: dedupeByFingerprint(pinned), triggered: dedupeByFingerprint(selected).slice(0, maxTriggered), contextText };
   };
 
@@ -1374,13 +1399,13 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           <div class="fg"><label>时间值（分钟，可空）</label><input id="mp_ftv" placeholder="例如 657"></div>
           <div class="fg"><label>楼层范围（例如 120-138，可空）</label><input id="mp_ffr" placeholder="120-138"></div>
           <div class="fg"><label>自定义 α（可空，0~0.95）</label><input id="mp_fa" type="number" min="0" max="0.95" step="0.01" placeholder="为空则使用全局默认 0.72"></div>
-          <div class="fg"><label>关联事件（连带召回）</label>
-            <div id="mp_flink_tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px"></div>
-            <div style="position:relative">
-              <input id="mp_flink_input" placeholder="输入事件名搜索已有记忆…" autocomplete="off">
-              <div id="mp_flink_dropdown" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:10;max-height:200px;overflow-y:auto;background:#1a1b1e;border:1px solid rgba(255,255,255,0.15);border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.4)"></div>
+          <div class="fg"><label>事件组（同组事件连带召回）</label>
+            <div id="mp_fgrp_tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px"></div>
+            <div style="display:flex;gap:5px">
+              <input id="mp_fgrp_input" placeholder="输入组名或新建…" style="flex:1" autocomplete="off">
+              <button class="btn" id="mp_fgrp_add" style="white-space:nowrap">添加/新建</button>
             </div>
-            <input type="hidden" id="mp_flink" value="">
+            <div id="mp_fgrp_suggest" style="margin-top:6px"></div>
           </div>
           <div class="fg"><label>摘要</label><textarea id="mp_fs"></textarea></div>
           <div class="fg"><label>优先级</label><select id="mp_fp"><option value="high">置顶（每轮注入）</option><option value="medium" selected>普通（关键词触发）</option><option value="low">低（保底槽位）</option></select></div>
@@ -1393,7 +1418,6 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
             <input id="mp_xs" placeholder="搜索事件名/摘要/人物…">
             <select id="mp_xty"><option value="">类型</option><option>相遇</option><option>冲突</option><option>揭示</option><option>抉择</option><option>羁绊</option><option>转变</option><option>收束</option><option>日常</option></select>
             <select id="mp_xwt"><option value="">权重</option><option>核心</option><option>主线</option><option>转折</option><option>点睛</option><option>氛围</option></select>
-            <button class="btn" id="mp_xjump" title="跳到首个匹配">跳转 ↓</button>
             <span class="ht" id="mp_xcount"></span>
           </div>
           <div id="mp_xl" style="scroll-behavior:smooth"></div>
@@ -1435,6 +1459,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           <div class="fg" style="margin-top:12px"><label>最大召回条数（Top N）</label><input id="mp_rmaxn" type="number" min="1" max="20" value="${h(String(loadRecallCfg().maxRecall||6))}"></div>
           <div class="fg" style="margin-top:12px"><label>上下文窗口（匹配最近 N 条）</label><input id="mp_rctxwin" type="number" min="3" max="30" value="${h(String(loadRecallCfg().contextWindow||8))}"></div>
           <div class="fg" style="margin-top:12px"><label>粘性保持（命中后维持 N 轮）</label><input id="mp_rsticky" type="number" min="0" max="20" value="${h(String(loadRecallCfg().stickyTurns??5))}"></div>
+          <div class="fg" style="margin-top:12px">
+            <label style="display:flex;align-items:center;gap:6px;color:#ccc"><input type="checkbox" id="mp_rgrp" ${loadRecallCfg().groupRecall!==false?'checked':''}>启用事件组连带召回（已召回事件所在组的其他成员按评分补位）</label>
+          </div>
           <div class="ht" style="margin-bottom:10px">正式召回与正式写入都按每 N 回合执行；匹配窗口参考最近 N 回合原文。规则为：主关键词至少命中 1 个才入候选；若配置了门控关键词，则还必须至少命中 1 个门控关键词；通过后再进入距离衰减概率。这里的 α 是默认基准，单条记忆可在编辑页自定义覆盖。</div>
           <button class="btn bp1" id="mp_rssv" style="width:100%;padding:9px;font-size:13px;margin-bottom:14px">保存召回设置</button>
           <div class="fg"><label>关键词黑名单（逗号或换行分隔）</label><textarea id="mp_bl" style="min-height:100px">${h(loadBlacklist().join('\n'))}</textarea></div>
@@ -1508,18 +1535,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       filtered = filtered.filter(m => (m.event||'').toLowerCase().includes(q) || (m.summary||'').toLowerCase().includes(q) || (m.primaryKeywords||[]).join(' ').toLowerCase().includes(q));
     }
     if(!filtered.length){c.innerHTML='<div class="emp">无匹配记忆（共 '+memories.length+' 条）</div>';return;}
-    // Build bidirectional link map for display
-    const _biLinkMap = new Map();
-    for (const m of memories) {
-      if (Array.isArray(m.linkedIds)) {
-        for (const lid of m.linkedIds) {
-          if (!_biLinkMap.has(m.id)) _biLinkMap.set(m.id, new Set());
-          _biLinkMap.get(m.id).add(lid);
-          if (!_biLinkMap.has(lid)) _biLinkMap.set(lid, new Set());
-          _biLinkMap.get(lid).add(m.id);
-        }
-      }
-    }
+    // Build group membership map for display
+    const _grpData = loadGroups();
     // Sort
     if (_listSort !== 'default') {
       filtered = [...filtered];
@@ -1543,10 +1560,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const canRebuild = true;
       const pick = `<label class="ht" style="display:flex;align-items:center;gap:6px"><input type="checkbox" class="mp_pick" data-id="${h(m.id)}" ${selectedIds.has(m.id)?'checked':''}>选择</label>`;
       const rebuildBtn = `<button class="btn bp1" onclick="window._mpKR('${m.id}')">${kwRunning && kwRunningId===m.id ? '中止重构' : '优化关键词'}</button>`;
-      const biLinks = _biLinkMap.get(m.id);
-      const linkCount = biLinks ? biLinks.size : 0;
-      const linkBadge = linkCount ? '<span class="kw" style="background:rgba(251,191,36,0.15);color:#fbbf24">🔗'+linkCount+'</span>' : '';
-      return `<div class="mi"><div class="mh"><span class="me">${pin}${h(m.event)}</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${pick}<span class="bp ${pc}">${pl}</span></div></div>${time}<div class="ms">${h(m.summary)}</div><div class="kr">${src}${linkBadge}${pkw}${skw}${ent}</div><div class="ma">${rebuildBtn}<button class="btn" onclick="window._mpE('${m.id}')">编辑</button><button class="btn bd1" onclick="window._mpD('${m.id}')">删除</button></div></div>`;
+      const memGrps = Object.keys(_grpData).filter(g => (_grpData[g]||[]).includes(m.id));
+      const grpBadge = memGrps.length ? memGrps.map(g => '<span class="kw" style="background:rgba(251,191,36,0.15);color:#fbbf24">📎'+h(g)+'</span>').join('') : '';
+      return `<div class="mi"><div class="mh"><span class="me">${pin}${h(m.event)}</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${pick}<span class="bp ${pc}">${pl}</span></div></div>${time}<div class="ms">${h(m.summary)}</div><div class="kr">${src}${grpBadge}${pkw}${skw}${ent}</div><div class="ma">${rebuildBtn}<button class="btn" onclick="window._mpE('${m.id}')">编辑</button><button class="btn bd1" onclick="window._mpD('${m.id}')">删除</button></div></div>`;
     }).join('');
     $('mp_sel_info').textContent = `已选 ${selectedIds.size} 条记忆`;
     c.querySelectorAll('.mp_pick').forEach(el=>{
@@ -1576,7 +1592,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const d=done.has(String(e.id));
       const fr=deriveFloorRangeFromXB(e);
       const frLabel=Array.isArray(fr)?` | #${fr[0]}-${fr[1]}`:'';
-      return `<div class="xi" id="mp_xb_${h(e.id)}"><div class="mh"><span class="xt">${h(e.title)}</span><span class="ht">${h(e.type||'')} ${h(e.weight||'')}</span></div><div class="ht">${h(e.timeLabel||'')} | ${h(e.id)}${h(frLabel)}</div><div class="ms">${h(e.summary)}</div><div class="xp">${(e.participants||[]).map(p=>h(p)).join(', ')||'—'}</div><div class="ma">${Array.isArray(fr)?`<button class="btn" onclick="window._mpXCtx(${fr[0]},${fr[1]})">查看原文 #${fr[0]}-${fr[1]}</button>`:''}${d?`<span class="ht" style="margin-right:6px">已导入</span><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">改为置顶</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">改为普通</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">改为低</button><button class="btn bd1" onclick="window._mpD_xb('${h(e.id)}')">移除</button>`:`<button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">置顶导入</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">普通导入</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">低导入</button>`}</div></div>`;
+      return `<div class="xi" id="mp_xb_${h(e.id)}"><div class="mh"><span class="xt">${h(e.title)}</span><span class="ht">${h(e.type||'')} ${h(e.weight||'')}</span></div><div class="ht">${h(e.timeLabel||'')} | ${h(e.id)}${h(frLabel)}</div><div class="ms">${h(e.summary)}</div><div class="xp">${(e.participants||[]).map(p=>h(p)).join(', ')||'—'}</div><div class="ma"><button class="btn" onclick="window._mpXLocate('${h(e.id)}')">定位</button>${d?`<span class="ht" style="margin-right:6px">已导入</span><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">改为置顶</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">改为普通</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">改为低</button><button class="btn bd1" onclick="window._mpD_xb('${h(e.id)}')">移除</button>`:`<button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">置顶导入</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">普通导入</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">低导入</button>`}</div></div>`;
     }).join('');
   };
 
@@ -1754,69 +1770,79 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   renderList();renderXb();
 
-  // ===== Linked Event Autocomplete =====
-  const _linkState = { ids: [] };
-  const _linkRenderTags = () => {
-    const container = $('mp_flink_tags');
-    if (!container) return;
-    container.innerHTML = _linkState.ids.map(id => {
-      const mem = memories.find(m => m.id === id);
-      const label = mem ? mem.event : id;
-      return `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(124,107,240,0.15);color:#a5b4fc;padding:2px 6px;border-radius:4px;font-size:11px">${h(label)}<span style="cursor:pointer;color:#f87171;font-weight:bold" data-unlinkid="${h(id)}">&times;</span></span>`;
-    }).join('');
-    // Sync hidden field
-    if ($('mp_flink')) $('mp_flink').value = _linkState.ids.join(', ');
-    // Bind remove
-    container.querySelectorAll('[data-unlinkid]').forEach(el => {
-      el.onclick = () => {
-        _linkState.ids = _linkState.ids.filter(x => x !== el.getAttribute('data-unlinkid'));
-        _linkRenderTags();
-      };
+  // ===== Event Group Management =====
+  const GK = 'mp_event_groups';
+  const loadGroups = () => { try { const store = _getStore(); if (store && store[GK]) return store[GK]; } catch {} return {}; };
+  const saveGroups = async (groups) => { const store = _getStore(); if (store) { store[GK] = groups; _saveDebounced(); } };
+  // groups: { groupName: [memId1, memId2, ...], ... }
+
+  const _grpState = { names: [] }; // groups this memory belongs to
+  const _grpRenderTags = () => {
+    const container = $('mp_fgrp_tags'); if (!container) return;
+    container.innerHTML = _grpState.names.map(g =>
+      `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(251,191,36,0.15);color:#fbbf24;padding:2px 8px;border-radius:4px;font-size:11px">${h(g)}<span style="cursor:pointer;color:#f87171;font-weight:bold" data-rmgrp="${h(g)}">&times;</span></span>`
+    ).join('');
+    container.querySelectorAll('[data-rmgrp]').forEach(el => {
+      el.onclick = () => { _grpState.names = _grpState.names.filter(x => x !== el.getAttribute('data-rmgrp')); _grpRenderTags(); };
     });
   };
-  const _linkSetIds = (ids) => {
-    _linkState.ids = Array.isArray(ids) ? ids.filter(Boolean) : [];
-    _linkRenderTags();
+  const _grpSetNames = (names) => { _grpState.names = [...new Set((names||[]).filter(Boolean))]; _grpRenderTags(); };
+  const _grpAddName = (name) => { const n = (name||'').trim(); if (!n || _grpState.names.includes(n)) return; _grpState.names.push(n); _grpRenderTags(); };
+
+  // Get all group names this memory belongs to
+  const getMemGroups = (memId) => {
+    const groups = loadGroups();
+    return Object.keys(groups).filter(g => (groups[g]||[]).includes(memId));
   };
-  const _linkAddId = (id) => {
-    if (!id || _linkState.ids.includes(id)) return;
-    _linkState.ids.push(id);
-    _linkRenderTags();
+
+  // Suggest: show existing groups + auto-suggest based on similar keywords/floor
+  const _grpRenderSuggest = (memId) => {
+    const el = $('mp_fgrp_suggest'); if (!el) return;
+    const groups = loadGroups();
+    const allNames = Object.keys(groups);
+    if (!allNames.length && !memId) { el.innerHTML = '<span class="ht">暂无事件组</span>'; return; }
+    // Auto-suggest: find memories with overlapping keywords/floor
+    let suggested = [];
+    if (memId) {
+      const mem = memories.find(m => m.id === memId);
+      if (mem) {
+        const myKws = new Set([...(mem.primaryKeywords||[]), ...(mem.secondaryKeywords||[])].map(k => k.toLowerCase()));
+        const myFloor = mem.floorRange;
+        for (const m of memories) {
+          if (m.id === memId) continue;
+          const theirKws = [...(m.primaryKeywords||[]), ...(m.secondaryKeywords||[])].map(k => k.toLowerCase());
+          const kwOverlap = theirKws.filter(k => myKws.has(k)).length;
+          const floorClose = myFloor && m.floorRange ? Math.abs(myFloor[0] - m.floorRange[0]) < 30 : false;
+          if (kwOverlap >= 2 || floorClose) {
+            const theirGroups = getMemGroups(m.id);
+            for (const g of theirGroups) { if (!suggested.includes(g) && !_grpState.names.includes(g)) suggested.push(g); }
+          }
+        }
+      }
+    }
+    const existingBtns = allNames.filter(g => !_grpState.names.includes(g)).slice(0, 10).map(g =>
+      `<button class="btn _grp_ex" data-gn="${h(g)}" style="font-size:10px;padding:2px 8px">${h(g)} (${(groups[g]||[]).length})</button>`
+    ).join('');
+    const suggestBtns = suggested.slice(0, 5).map(g =>
+      `<button class="btn bp1 _grp_sg" data-gn="${h(g)}" style="font-size:10px;padding:2px 8px">推荐: ${h(g)}</button>`
+    ).join('');
+    el.innerHTML = (suggestBtns ? '<div style="margin-bottom:4px">' + suggestBtns + '</div>' : '') +
+      (existingBtns ? '<div class="ht" style="margin-bottom:2px">已有组：</div>' + existingBtns : '<span class="ht">暂无事件组</span>');
+    el.querySelectorAll('._grp_ex, ._grp_sg').forEach(btn => {
+      btn.onclick = () => { _grpAddName(btn.getAttribute('data-gn')); _grpRenderSuggest(memId); };
+    });
   };
-  const _linkInput = $('mp_flink_input');
-  const _linkDrop = $('mp_flink_dropdown');
-  if (_linkInput && _linkDrop) {
-    _linkInput.oninput = () => {
-      const q = (_linkInput.value || '').trim().toLowerCase();
-      if (!q || q.length < 1) { _linkDrop.style.display = 'none'; return; }
-      const currentEditId = editId;
-      const candidates = memories.filter(m => {
-        if (m.id === currentEditId) return false;
-        if (_linkState.ids.includes(m.id)) return false;
-        return (m.event || '').toLowerCase().includes(q) || (m.id || '').toLowerCase().includes(q) || (m.summary || '').toLowerCase().includes(q);
-      }).slice(0, 8);
-      if (!candidates.length) { _linkDrop.style.display = 'none'; return; }
-      _linkDrop.style.display = '';
-      _linkDrop.innerHTML = candidates.map(m => {
-        const src = m.source === 'xb_event' ? ' [XB]' : m.source === 'batch' ? ' [BATCH]' : m.source === 'merged' ? ' [MERGED]' : '';
-        const flr = Array.isArray(m.floorRange) ? ' #' + m.floorRange[0] + '-' + m.floorRange[1] : '';
-        return `<div class="_lkopt" data-linkid="${h(m.id)}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px"><div style="color:#fff;font-weight:500">${h(m.event)}${src}</div><div style="color:#777;font-size:10px">${h(m.id)}${flr}</div></div>`;
-      }).join('');
-      _linkDrop.querySelectorAll('._lkopt').forEach(el => {
-        el.onmousedown = (e) => {
-          e.preventDefault();
-          const id = el.getAttribute('data-linkid');
-          _linkAddId(id);
-          _linkInput.value = '';
-          _linkDrop.style.display = 'none';
-        };
-        el.onmouseenter = () => { el.style.background = 'rgba(124,107,240,0.15)'; };
-        el.onmouseleave = () => { el.style.background = ''; };
-      });
-    };
-    _linkInput.onblur = () => { setTimeout(() => { _linkDrop.style.display = 'none'; }, 200); };
-    _linkInput.onfocus = () => { if (_linkInput.value.trim()) _linkInput.oninput(); };
-  }
+
+  $('mp_fgrp_add')?.addEventListener('click', () => {
+    const v = $('mp_fgrp_input')?.value?.trim();
+    if (!v) { toastr?.warning?.('请输入组名'); return; }
+    _grpAddName(v);
+    $('mp_fgrp_input').value = '';
+    _grpRenderSuggest(editId);
+  });
+  $('mp_fgrp_input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('mp_fgrp_add')?.click(); }
+  });
   // Filter listeners
   root.querySelectorAll('[data-mf]').forEach(btn => {
     btn.onclick = () => {
@@ -1867,8 +1893,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
     await withLock('save_form', async () => {
       const alphaVal = alphaRaw === '' ? null : Number(alphaRaw);
-      const linkedIds = [..._linkState.ids];
-      const patch={event:ev,primaryKeywords:pkw,secondaryKeywords:skw,entityKeywords:ekw,summary:sm,priority:pr,timeLabel:tl,timeValue:Number.isFinite(tv)?tv:null,floorRange:fr,alpha:Number.isFinite(alphaVal)?Math.max(0,Math.min(0.95,alphaVal)):null,linkedIds:linkedIds.length?linkedIds:undefined};
+      const patch={event:ev,primaryKeywords:pkw,secondaryKeywords:skw,entityKeywords:ekw,summary:sm,priority:pr,timeLabel:tl,timeValue:Number.isFinite(tv)?tv:null,floorRange:fr,alpha:Number.isFinite(alphaVal)?Math.max(0,Math.min(0.95,alphaVal)):null};
       const currentId = editId || gid();
       if(editId){
         const old = memories.find(m=>m.id===editId);
@@ -1878,20 +1903,19 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       } else {
         memories = upsertMemory(memories, {id:currentId,...patch,source:'manual',timestamp:Date.now()});
       }
-      // Sync bidirectional links: ensure each linked target also links back
-      if (linkedIds.length) {
-        for (const lid of linkedIds) {
-          const target = memories.find(m => m.id === lid);
-          if (target) {
-            const targetLinks = new Set(target.linkedIds || []);
-            if (!targetLinks.has(currentId)) {
-              targetLinks.add(currentId);
-              target.linkedIds = [...targetLinks];
-              memories = upsertMemory(memories, target);
-            }
-          }
-        }
+      // Sync event groups
+      const groups = loadGroups();
+      // Remove this memory from groups it's no longer in
+      for (const gn of Object.keys(groups)) {
+        const idx = (groups[gn]||[]).indexOf(currentId);
+        if (idx >= 0 && !_grpState.names.includes(gn)) { groups[gn].splice(idx, 1); if (!groups[gn].length) delete groups[gn]; }
       }
+      // Add this memory to its groups
+      for (const gn of _grpState.names) {
+        if (!groups[gn]) groups[gn] = [];
+        if (!groups[gn].includes(currentId)) groups[gn].push(currentId);
+      }
+      await saveGroups(groups);
       await saveMem(memories);
       renderList();
       renderXb();
@@ -1909,7 +1933,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     const m=memories.find(x=>x.id===id);if(!m)return;
     _listScrollY=root.querySelector('.bd')?.scrollTop||0;
     editId=id;
-    _editUndo={event:m.event||'',primaryKeywords:(m.primaryKeywords||m.keywords||[]).join(', '),secondaryKeywords:(m.secondaryKeywords||[]).join(', '),entityKeywords:(m.entityKeywords||[]).join(', '),timeLabel:m.timeLabel||'',timeValue:Number.isFinite(Number(m.timeValue))?String(m.timeValue):'',floorRange:Array.isArray(m.floorRange)?`${m.floorRange[0]}-${m.floorRange[1]}`:'',alpha:Number.isFinite(Number(m.alpha))?String(m.alpha):'',linkedIds:(m.linkedIds||[]).join(', '),summary:m.summary||'',priority:m.priority||'medium'};
+    _editUndo={event:m.event||'',primaryKeywords:(m.primaryKeywords||m.keywords||[]).join(', '),secondaryKeywords:(m.secondaryKeywords||[]).join(', '),entityKeywords:(m.entityKeywords||[]).join(', '),timeLabel:m.timeLabel||'',timeValue:Number.isFinite(Number(m.timeValue))?String(m.timeValue):'',floorRange:Array.isArray(m.floorRange)?`${m.floorRange[0]}-${m.floorRange[1]}`:'',alpha:Number.isFinite(Number(m.alpha))?String(m.alpha):'',groupNames:getMemGroups(m.id),summary:m.summary||'',priority:m.priority||'medium'};
     $('mp_fe').value=m.event||'';
     $('mp_fpk').value=(m.primaryKeywords||m.keywords||[]).join(', ');
     $('mp_fsk').value=(m.secondaryKeywords||[]).join(', ');
@@ -1918,14 +1942,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ftv').value=Number.isFinite(Number(m.timeValue))?String(m.timeValue):'';
     $('mp_ffr').value=Array.isArray(m.floorRange)?`${m.floorRange[0]}-${m.floorRange[1]}`:'';
     $('mp_fa').value=Number.isFinite(Number(m.alpha))?String(m.alpha):'';
-    _linkSetIds(m.linkedIds || []);
-    // Also show reverse links (other memories that link to this one)
-    for (const om of memories) {
-      if (om.id !== m.id && Array.isArray(om.linkedIds) && om.linkedIds.includes(m.id)) {
-        _linkAddId(om.id);
-      }
-    }
-    if ($('mp_flink_input')) $('mp_flink_input').value = '';
+    _grpSetNames(getMemGroups(m.id));
+    if ($('mp_fgrp_input')) $('mp_fgrp_input').value = '';
+    _grpRenderSuggest(m.id);
     $('mp_fs').value=m.summary||'';
     $('mp_fp').value=m.priority||'medium';
     root.querySelector('.tab[data-t="add"]').click();
@@ -1962,8 +1981,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ftv').value='';
     $('mp_ffr').value='';
     $('mp_fa').value='';
-    _linkSetIds([]);
-    if ($('mp_flink_input')) $('mp_flink_input').value = '';
+    _grpSetNames([]);
+    if ($('mp_fgrp_input')) $('mp_fgrp_input').value = '';
     $('mp_fs').value='';
     $('mp_fp').value='medium';
     if (keepTab) root.querySelector('.tab[data-t="add"]').click();
@@ -1979,8 +1998,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     $('mp_ftv').value=_editUndo.timeValue;
     $('mp_ffr').value=_editUndo.floorRange;
     $('mp_fa').value=_editUndo.alpha;
-    _linkSetIds(_editUndo.linkedIds ? _editUndo.linkedIds.split(/[,，]/).map(s=>s.trim()).filter(Boolean) : []);
-    if ($('mp_flink_input')) $('mp_flink_input').value = '';
+    _grpSetNames(_editUndo.groupNames || []);
+    if ($('mp_fgrp_input')) $('mp_fgrp_input').value = '';
     $('mp_fs').value=_editUndo.summary;
     $('mp_fp').value=_editUndo.priority;
     toastr?.success?.('已撤回到编辑前状态');
@@ -1997,50 +2016,20 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   $('mp_xs').oninput=()=>{renderXb();const items=$('mp_xl')?.querySelectorAll('.xi');$('mp_xcount').textContent=items?.length?items.length+'条':'';};
   $('mp_xty').onchange=renderXb;$('mp_xwt').onchange=renderXb;
-  // XB jump: scroll the bd (scrollable body) so that the first matched XB event is in view
-  $('mp_xjump').onclick=()=>{
-    const xl=$('mp_xl'); if(!xl) return;
-    const first=xl.querySelector('.xi');
-    if(!first){toastr?.warning?.('无匹配事件');return;}
-    // The scrollable container is .bd
-    const bd=root.querySelector('.bd');
-    if(bd){
-      const bdRect=bd.getBoundingClientRect();
-      const elRect=first.getBoundingClientRect();
-      bd.scrollTop += elRect.top - bdRect.top - 60;
-    }
-    first.style.outline='2px solid #7c6bf0';first.style.transition='outline 0.3s';
-    setTimeout(()=>{first.style.outline='';},1500);
-  };
 
-  // XB event -> view source context at floor range (switch to batch tab)
-  window._mpXCtx=(startFloor, endFloor)=>{
-    root.querySelector('.tab[data-t="batch"]')?.click();
-    const center = Math.round((startFloor + endFloor) / 2);
+  // XB locate: clear search, show full list, scroll to target event
+  window._mpXLocate=(eid)=>{
+    $('mp_xs').value='';$('mp_xty').value='';$('mp_xwt').value='';
+    renderXb();
     setTimeout(()=>{
-      showContextView(center);
-      _ctxT = Math.max(0, startFloor - 3);
-      _ctxB = Math.min(chat.length - 1, endFloor + 1);
-      const ls = _ctxS(_ctxT, _ctxB);
-      const container = $('mp_bctx');
-      if (container) {
-        const inner = container.querySelector('#_csa') || container;
-        inner.innerHTML = ls.map(l => _ctxH(l)).join('');
-        _bindCk();
-        setTimeout(()=>{
-          const lines = inner.querySelectorAll('.ctxline');
-          for (const line of lines) {
-            const ck = line.querySelector('._ck');
-            if (ck && Number(ck.getAttribute('data-floor')) === startFloor) {
-              line.scrollIntoView({behavior:'smooth', block:'center'});
-              line.style.outline='2px solid #7c6bf0';
-              setTimeout(()=>{line.style.outline='';},2000);
-              break;
-            }
-          }
-        }, 50);
+      const el=$('mp_xb_'+eid);
+      if(el){
+        const bd=root.querySelector('.bd');
+        if(bd){const br=bd.getBoundingClientRect();const er=el.getBoundingClientRect();bd.scrollTop+=er.top-br.top-80;}
+        el.style.outline='2px solid #7c6bf0';el.style.transition='outline 0.3s';
+        setTimeout(()=>{el.style.outline='';},2000);
       }
-    }, 100);
+    },50);
   };
 
   window._mpXI=async(eid,prio)=>{
@@ -2377,7 +2366,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   $('mp_bpd').onclick=async()=>{$('mp_bpr').value=DEF_PROMPT;await savePrompt(DEF_PROMPT);toastr?.success?.('已恢复默认');};
 
   $('mp_rssv').onclick=async()=>{
-    await saveRecallCfg({every:Math.max(1,Math.round(Number($('mp_revery').value)||1)),alpha:Math.max(0,Math.min(0.95,(($('mp_ralpha').value?.trim?.()==='')?0.72:Number($('mp_ralpha').value)))),maxRecall:Math.max(1,Math.min(20,Number($('mp_rmaxn')?.value)||6)),contextWindow:Math.max(3,Math.min(30,Number($('mp_rctxwin')?.value)||8)),stickyTurns:Math.max(0,Math.min(20,Number($('mp_rsticky')?.value)??5))});
+    await saveRecallCfg({every:Math.max(1,Math.round(Number($('mp_revery').value)||1)),alpha:Math.max(0,Math.min(0.95,(($('mp_ralpha').value?.trim?.()==='')?0.72:Number($('mp_ralpha').value)))),maxRecall:Math.max(1,Math.min(20,Number($('mp_rmaxn')?.value)||6)),contextWindow:Math.max(3,Math.min(30,Number($('mp_rctxwin')?.value)||8)),stickyTurns:Math.max(0,Math.min(20,Number($('mp_rsticky')?.value)??5)),groupRecall:!!$('mp_rgrp')?.checked});
     toastr?.success?.('召回设置已保存');
   };
 
@@ -2414,6 +2403,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         summaryPrompt: loadPrompt(),
         kwRebuildPrompt: loadKwPrompt(),
         mergePrompt: loadMergePrompt(),
+        eventGroups: loadGroups(),
       };
       const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -2461,6 +2451,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       if (data.summaryPrompt) { await savePrompt(data.summaryPrompt); counts.push('分析Prompt'); }
       if (data.kwRebuildPrompt) { await saveKwPrompt(data.kwRebuildPrompt); counts.push('重构Prompt'); }
       if (data.mergePrompt) { await saveMergePrompt(data.mergePrompt); counts.push('合并Prompt'); }
+      if (data.eventGroups && typeof data.eventGroups === 'object') { await saveGroups(data.eventGroups); counts.push('事件组'); }
       renderList(); renderXb();
       $('mp_io_status').textContent = '导入成功：' + counts.join('、');
       $('mp_io_status').style.color = '#4ade80';
