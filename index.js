@@ -204,28 +204,31 @@ function hookRecall() {
           const charScope = String(charObj?.avatar ?? charObj?.name ?? c?.chatMetadata?.character_name ?? c?.name2 ?? '');
           const ck = String(c.chatId ?? c.chatMetadata?.chat_file_name ?? 'default') + '::' + charScope;
           if (store && store[ck]) {
+            // First-time init: start from current position, not #0
+            if (store[ck]._lastAutoSummarizeFloor == null) {
+              store[ck]._lastAutoSummarizeFloor = chatLen;
+              saveSettings();
+              console.log('[MP] Auto-summarize: first init, start from #' + chatLen);
+            }
             const lastAutoFloor = store[ck]._lastAutoSummarizeFloor || 0;
-            // Handle reroll/delete: if chat shortened, adjust marker down
+            // Reroll/delete: adjust marker down
             if (chatLen < lastAutoFloor) {
               store[ck]._lastAutoSummarizeFloor = chatLen;
               saveSettings();
-              console.log('[MP] Auto-summarize: chat shortened (reroll/delete), adjusted marker to ' + chatLen);
             }
-            // Track history of all summarized ranges
             if (!store[ck]._autoSummarizeHistory) store[ck]._autoSummarizeHistory = [];
             const effectiveLastFloor = Math.min(store[ck]._lastAutoSummarizeFloor || 0, chatLen);
-            // Trigger when enough new messages since last summarize point
-            if (chatLen - effectiveLastFloor >= interval) {
+            // Skip if already running
+            if (window._mpAutoSummarizeRunning) { /* wait */ }
+            else if (chatLen - effectiveLastFloor >= interval) {
               const fromIdx = effectiveLastFloor;
               const toIdx = chatLen;
               store[ck]._lastAutoSummarizeFloor = toIdx;
-              // Record this range
               store[ck]._autoSummarizeHistory.push({ from: fromIdx + 1, to: toIdx, time: Date.now(), status: 'running' });
-              // Keep only last 50 history entries
               if (store[ck]._autoSummarizeHistory.length > 50) store[ck]._autoSummarizeHistory = store[ck]._autoSummarizeHistory.slice(-50);
               saveSettings();
-              console.log('[MP] Auto-summarize triggered: floor ' + (fromIdx + 1) + '-' + toIdx);
-              // Run the actual analysis in background
+              window._mpAutoSummarizeRunning = true;
+              window._mpAutoSummarizeAbort = new AbortController();
               try {
                 const apiCfg = store[ck]?.mp_api_config || {};
                 const provider = apiCfg.provider || 'openai';
@@ -233,9 +236,8 @@ function hookRecall() {
                 const key = apiCfg.key || '';
                 const rawBase = apiCfg.url || '';
                 if (!key || !model) {
-                  console.warn('[MP] Auto-summarize: API not configured');
                   store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'error_no_api';
-                  saveSettings();
+                  saveSettings(); toastr?.warning?.('自动总结：API 未配置');
                 } else {
                   const promptTemplate = getCustomPrompt('analysis', null);
                   if (promptTemplate) {
@@ -243,8 +245,7 @@ function hookRecall() {
                     const uL = c.name1 || '用户', cL = c.name2 || '角色';
                     const text = [];
                     for (let i = fromIdx; i < toIdx; i++) {
-                      const m = chat[i];
-                      if (!m || !m.mes) continue;
+                      const m = chat[i]; if (!m || !m.mes) continue;
                       const body = String(m.mes).replace(/<\s*think\b[^>]*>[\s\S]*?<\s*\/\s*think\s*>/gi, ' ').trim();
                       if (!body) continue;
                       text.push('#' + (i + 1) + '[' + (m.is_user ? uL : (m.name || cL)) + ']' + body);
@@ -270,7 +271,7 @@ function hookRecall() {
                         headers = { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' };
                         reqBody = JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: 4096 });
                       }
-                      const res = await fetch(url, { method: 'POST', headers, body: reqBody });
+                      const res = await fetch(url, { method: 'POST', headers, body: reqBody, signal: window._mpAutoSummarizeAbort?.signal });
                       if (res.ok) {
                         const d = await res.json();
                         let resultText = '';
@@ -297,18 +298,16 @@ function hookRecall() {
                             floorRange: Array.isArray(o.floorRange) && o.floorRange.length >= 2 ? o.floorRange : [fromIdx + 1, toIdx],
                             timeLabel: o.timeLabel || '第' + (fromIdx + 1) + '-' + toIdx + '层',
                           }));
-                          // Append to existing pending auto results (not overwrite)
                           let existing = [];
                           try { const raw = localStorage.getItem('mp_pending_ops_results_auto'); if (raw) existing = JSON.parse(raw); } catch {}
                           if (!Array.isArray(existing)) existing = [];
                           const all = [...existing, ...nms];
                           try { localStorage.setItem('mp_pending_ops', JSON.stringify({ auto: { status: 'done', message: all.length + '条自动提取（累计）', resultCount: all.length, updatedAt: Date.now() } })); } catch {}
                           try { localStorage.setItem('mp_pending_ops_results_auto', JSON.stringify(all)); } catch {}
-                          // Update history
                           store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'done';
                           store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].count = nms.length;
                           saveSettings();
-                          toastr?.info?.('MemoryPilot 自动总结完成（#' + (fromIdx + 1) + '-' + toIdx + '）：' + nms.length + ' 条，请在面板确认。');
+                          toastr?.info?.('自动总结完成（#' + (fromIdx + 1) + '-' + toIdx + '）：' + nms.length + ' 条');
                         } else {
                           store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'empty';
                           saveSettings();
@@ -321,8 +320,16 @@ function hookRecall() {
                   }
                 }
               } catch (autoErr) {
-                console.warn('[MP] Auto-summarize LLM error:', autoErr);
-                try { store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'error'; saveSettings(); } catch {}
+                if (autoErr?.name === 'AbortError') {
+                  store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'aborted';
+                  saveSettings(); toastr?.warning?.('自动总结已中止');
+                } else {
+                  console.warn('[MP] Auto-summarize error:', autoErr);
+                  try { store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'error'; saveSettings(); } catch {}
+                }
+              } finally {
+                window._mpAutoSummarizeRunning = false;
+                window._mpAutoSummarizeAbort = null;
               }
             }
           }

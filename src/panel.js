@@ -2727,6 +2727,10 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           '<input id="mp_auto_setfloor" type="number" min="0" max="' + totalFloors + '" value="' + lastFloor + '" style="width:80px;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.3);color:#eee;font-size:12px">' +
           '<button class="btn" id="mp_auto_setfloor_btn" style="font-size:11px;padding:4px 10px">设为起始楼层</button>' +
           '<button class="btn" id="mp_auto_setfloor_cur" style="font-size:11px;padding:4px 10px">跳到当前（#' + totalFloors + '）</button>' +
+          '</div>' +
+          '<div style="display:flex;gap:5px;align-items:center;margin-top:4px">' +
+          (unsummarized > 0 ? '<button class="btn bp1" id="mp_auto_runnow" style="font-size:11px;padding:4px 10px">立即总结未处理的 ' + unsummarized + ' 层</button>' : '') +
+          (window._mpAutoSummarizeRunning ? '<button class="btn bd1" id="mp_auto_abort" style="font-size:11px;padding:4px 10px">中止当前总结</button><span class="ht" style="color:#fbbf24">⏳ 总结中…</span>' : '') +
           '</div>';
         $('mp_auto_setfloor_btn')?.addEventListener('click', async () => {
           const v = Number($('mp_auto_setfloor')?.value);
@@ -2742,6 +2746,16 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           _saveDebounced();
           toastr?.success?.('已跳过全部历史，从当前楼层 #' + totalFloors + ' 开始');
           $('mp_auto_progress').innerHTML = '已更新，下次打开面板刷新显示';
+        });
+        $('mp_auto_abort')?.addEventListener('click', () => {
+          if (window._mpAutoSummarizeAbort) { window._mpAutoSummarizeAbort.abort(); toastr?.info?.('正在中止…'); }
+        });
+        $('mp_auto_runnow')?.addEventListener('click', () => {
+          // Temporarily set marker back so next message triggers
+          store._lastAutoSummarizeFloor = Math.max(0, totalFloors - (interval + 1));
+          _saveDebounced();
+          toastr?.success?.('已重置标记，下一条消息将触发自动总结 #' + (store._lastAutoSummarizeFloor + 1) + '-' + totalFloors + '+');
+          $('mp_auto_progress').innerHTML = '已设置，发送下一条消息时触发总结';
         });
       }
       // History
