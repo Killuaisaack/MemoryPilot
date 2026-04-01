@@ -1520,16 +1520,26 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         </div>
       </div>
       <button class="mp-top-btn" id="mp_gotop" title="回到顶部">↑</button>
+      <button class="mp-top-btn" id="mp_gobot" title="到底部" style="bottom:58px">↓</button>
     </div>
   `;
   document.body.appendChild(root);
 
-  // Floating top button: show when scrolled down
+  // Floating top/bottom buttons
   const _bd = root.querySelector('.bd');
   const _topBtn = $('mp_gotop');
-  if (_bd && _topBtn) {
-    _bd.addEventListener('scroll', () => { _topBtn.classList.toggle('vis', _bd.scrollTop > 150); });
+  const _botBtn = $('mp_gobot');
+  if (_bd && _topBtn && _botBtn) {
+    const _updateFloatBtns = () => {
+      const atTop = _bd.scrollTop < 80;
+      const atBot = _bd.scrollTop + _bd.clientHeight >= _bd.scrollHeight - 80;
+      _topBtn.classList.toggle('vis', !atTop);
+      _botBtn.classList.toggle('vis', !atBot);
+    };
+    _bd.addEventListener('scroll', _updateFloatBtns);
+    setTimeout(_updateFloatBtns, 200);
     _topBtn.onclick = () => { _bd.scrollTop = 0; };
+    _botBtn.onclick = () => { _bd.scrollTop = _bd.scrollHeight; };
   }
 
   let selectedIds = new Set();
@@ -1587,7 +1597,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const rebuildBtn = `<button class="btn bp1" onclick="window._mpKR('${m.id}')">${kwRunning && kwRunningId===m.id ? '中止重构' : '优化关键词'}</button>`;
       const memGrps = Object.keys(_grpData).filter(g => (_grpData[g]||[]).includes(m.id));
       const grpBadge = memGrps.length ? memGrps.map(g => '<span class="kw" style="background:rgba(251,191,36,0.15);color:#fbbf24">📎'+h(g)+'</span>').join('') : '';
-      return `<div class="mi"><div class="mh"><span class="me">${pin}${h(m.event)}</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${pick}<span class="bp ${pc}">${pl}</span></div></div>${time}<div class="ms">${h(m.summary)}</div><div class="kr">${src}${grpBadge}${pkw}${skw}${ent}</div><div class="ma">${rebuildBtn}<button class="btn" onclick="window._mpE('${m.id}')">编辑</button><button class="btn bd1" onclick="window._mpD('${m.id}')">删除</button></div></div>`;
+      return `<div class="mi" id="mp_mem_${h(m.id)}"><div class="mh"><span class="me" style="cursor:pointer" onclick="window._mpLocate('${h(m.id)}')" title="点击定位">${pin}${h(m.event)}</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${pick}<span class="bp ${pc}">${pl}</span></div></div>${time}<div class="ms">${h(m.summary)}</div><div class="kr">${src}${grpBadge}${pkw}${skw}${ent}</div><div class="ma">${rebuildBtn}<button class="btn" onclick="window._mpE('${m.id}')">编辑</button><button class="btn bd1" onclick="window._mpD('${m.id}')">删除</button></div></div>`;
     }).join('');
     $('mp_sel_info').textContent = `已选 ${selectedIds.size} 条记忆`;
     c.querySelectorAll('.mp_pick').forEach(el=>{
@@ -2103,6 +2113,25 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     },50);
   };
 
+  // Memory list locate: clear filters, scroll to target memory
+  window._mpLocate=(mid)=>{
+    _listFilter='all';_listSearch='';_listSort='default';
+    root.querySelectorAll('.ftab').forEach(b=>b.classList.remove('on'));
+    root.querySelector('[data-mf="all"]')?.classList.add('on');
+    if($('mp_f_search'))$('mp_f_search').value='';
+    if($('mp_f_sort'))$('mp_f_sort').value='default';
+    renderList();
+    setTimeout(()=>{
+      const el=$('mp_mem_'+mid);
+      if(el){
+        const bd=root.querySelector('.bd');
+        if(bd){const br=bd.getBoundingClientRect();const er=el.getBoundingClientRect();bd.scrollTop+=er.top-br.top-80;}
+        el.style.outline='2px solid #7c6bf0';el.style.transition='outline 0.3s';
+        setTimeout(()=>{el.style.outline='';},2000);
+      }
+    },50);
+  };
+
   window._mpXI=async(eid,prio)=>{
     const e=xbEvents.find(x=>String(x.id)===String(eid));if(!e)return;
     await withLock('xb_import_'+eid, async () => {
@@ -2230,11 +2259,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const cancelBtn = document.getElementById('mp_merge_cancel');
       // "编辑后确认": load merged data into edit form
       if (editBtn) {
-        editBtn.addEventListener('click', function onEdit() {
-          editBtn.removeEventListener('click', onEdit);
+        editBtn.addEventListener('click', function() {
           const preview = window._mpMergePreview;
           if (!preview) { toastr?.warning?.('预览数据丢失'); return; }
-          // Store merge context so save can finalize
           window._mpMergePendingEdit = preview;
           const m = preview.merged;
           editId = m.id;
