@@ -1323,6 +1323,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     #${P} .sr mark{background:rgba(251,191,36,0.3);color:#fbbf24;border-radius:2px;padding:0 1px}
     #${P} .rc{background:rgba(124,107,240,0.06);border:1px solid rgba(124,107,240,0.15);border-radius:8px;padding:8px 10px;margin-bottom:6px}
     #${P} .rc .rl{color:#888;font-size:10px}
+    #${P} .mp-top-btn{position:absolute;bottom:16px;right:16px;z-index:5;width:36px;height:36px;border-radius:50%;background:rgba(124,107,240,0.85);border:none;color:#fff;font-size:16px;cursor:pointer;display:none;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:opacity 0.2s}
+    #${P} .mp-top-btn:hover{background:rgba(124,107,240,1)}
+    #${P} .mp-top-btn.vis{display:flex}
     @media(max-width:760px){
       #${P}{padding:max(6px, env(safe-area-inset-top)) 6px max(6px, env(safe-area-inset-bottom)) 6px}
       #${P} .card{max-width:100%;max-height:calc(100dvh - max(12px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));border-radius:10px}
@@ -1379,6 +1382,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
             <button class="btn bp1" id="mp_rebuild_sel">批量重构关键词</button>
             <button class="btn" id="mp_grp_create" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.3);color:#fbbf24">建组</button>
             <button class="btn" id="mp_grp_addto" style="background:rgba(251,191,36,0.1);border-color:rgba(251,191,36,0.2);color:#fbbf24">加入已有组</button>
+            <button class="btn" id="mp_grp_manage" style="background:rgba(251,191,36,0.06);border-color:rgba(251,191,36,0.15);color:#d4a017">管理事件组</button>
           </div>
           <div class="ht" id="mp_sel_info" style="margin-bottom:6px">已选 0 条记忆</div><div style="display:flex;gap:5px;margin-bottom:8px;flex-wrap:wrap"><button class="btn bp1" id="mp_merge_sel">合并选中事件</button><select id="mp_merge_kw_mode" style="padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);background:rgba(0,0,0,0.3);color:#ddd;font-size:11px"><option value="default">关键词：默认合并</option><option value="ai">关键词：AI重构</option></select><label style="display:flex;align-items:center;gap:4px;color:#aaa;font-size:11px;white-space:nowrap"><input type="checkbox" id="mp_merge_ctx" checked>关联原文</label></div><div class="opline" id="mp_merge_status"></div><details class="det" style="margin-bottom:8px"><summary>事件合并 Prompt（可编辑，共用分析 API）</summary><textarea id="mp_mpr" style="width:100%;min-height:120px;margin-top:6px">${h(loadMergePrompt())}</textarea><div style="display:flex;gap:5px;margin-top:5px"><button class="btn" id="mp_mps">保存</button><button class="btn bd1" id="mp_mpd">恢复默认</button></div><div class="ht" style="margin-top:6px">合并选中记忆时使用。{{memories}} 替换为记忆信息，{{context}} 替换为楼层原文。</div></details><div class="opline" id="mp_kw_status"></div>
           <details class="det" style="margin-bottom:8px">
@@ -1426,7 +1430,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
             <select id="mp_xty"><option value="">类型</option><option>相遇</option><option>冲突</option><option>揭示</option><option>抉择</option><option>羁绊</option><option>转变</option><option>收束</option><option>日常</option></select>
             <select id="mp_xwt"><option value="">权重</option><option>核心</option><option>主线</option><option>转折</option><option>点睛</option><option>氛围</option></select>
             <span class="ht" id="mp_xcount"></span>
-            <button class="btn" id="mp_xtop" style="font-size:10px;padding:3px 8px" title="回到顶部">↑ 顶部</button>
+
           </div>
           <div id="mp_xl" style="scroll-behavior:smooth"></div>
         </div>
@@ -1515,9 +1519,18 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           </div>
         </div>
       </div>
+      <button class="mp-top-btn" id="mp_gotop" title="回到顶部">↑</button>
     </div>
   `;
   document.body.appendChild(root);
+
+  // Floating top button: show when scrolled down
+  const _bd = root.querySelector('.bd');
+  const _topBtn = $('mp_gotop');
+  if (_bd && _topBtn) {
+    _bd.addEventListener('scroll', () => { _topBtn.classList.toggle('vis', _bd.scrollTop > 150); });
+    _topBtn.onclick = () => { _bd.scrollTop = 0; };
+  }
 
   let selectedIds = new Set();
   let searchPicked = new Set();
@@ -1831,6 +1844,79 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     renderList();
     toastr?.success?.('已将 ' + added + ' 条记忆加入事件组「' + gn + '」');
   });
+
+  // Event group management overlay
+  $('mp_grp_manage')?.addEventListener('click', () => {
+    const groups = loadGroups();
+    const gnames = Object.keys(groups);
+    const listEl = $('mp_list');
+    if (!listEl) return;
+    const oldContent = listEl.innerHTML;
+    const renderGrpPage = () => {
+      const grps = loadGroups();
+      const gns = Object.keys(grps);
+      let html = '<div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center"><b style="color:#fbbf24;font-size:13px">📎 事件组管理</b><button class="btn" id="mp_grp_back">← 返回记忆列表</button></div>';
+      if (!gns.length) {
+        html += '<div class="emp">暂无事件组。在记忆列表中勾选多条记忆，点「建组」创建。</div>';
+      } else {
+        for (const gn of gns) {
+          const mids = grps[gn] || [];
+          const mems = mids.map(id => memories.find(m => m.id === id)).filter(Boolean);
+          html += '<div class="mi" style="border-color:rgba(251,191,36,0.2)">';
+          html += '<div class="mh"><span class="me" style="color:#fbbf24">📎 ' + h(gn) + '</span><span class="ht">' + mems.length + ' 条记忆</span></div>';
+          html += '<div style="margin:6px 0">';
+          for (const m of mems) {
+            html += '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03)">';
+            html += '<span class="ms" style="flex:1;margin:0">' + h(m.event || m.id) + '</span>';
+            html += '<button class="btn bd1 _grm_rm" data-gn="' + h(gn) + '" data-mid="' + h(m.id) + '" style="padding:2px 8px;font-size:10px">移出</button>';
+            html += '</div>';
+          }
+          html += '</div>';
+          html += '<div class="ma"><button class="btn bd1 _grm_del" data-gn="' + h(gn) + '" style="font-size:11px">删除整组</button><button class="btn _grm_ren" data-gn="' + h(gn) + '" style="font-size:11px">重命名</button></div>';
+          html += '</div>';
+        }
+      }
+      listEl.innerHTML = html;
+      // Bind
+      $('mp_grp_back')?.addEventListener('click', () => { renderList(); });
+      listEl.querySelectorAll('._grm_rm').forEach(el => {
+        el.onclick = async () => {
+          const gn = el.getAttribute('data-gn'), mid = el.getAttribute('data-mid');
+          const grps = loadGroups();
+          if (grps[gn]) { grps[gn] = grps[gn].filter(x => x !== mid); if (!grps[gn].length) delete grps[gn]; }
+          await saveGroups(grps);
+          renderGrpPage();
+          toastr?.success?.('已移出');
+        };
+      });
+      listEl.querySelectorAll('._grm_del').forEach(el => {
+        el.onclick = async () => {
+          const gn = el.getAttribute('data-gn');
+          if (!confirm('删除事件组「' + gn + '」？（不会删除记忆本身）')) return;
+          const grps = loadGroups();
+          delete grps[gn];
+          await saveGroups(grps);
+          renderGrpPage();
+          toastr?.success?.('已删除');
+        };
+      });
+      listEl.querySelectorAll('._grm_ren').forEach(el => {
+        el.onclick = async () => {
+          const oldName = el.getAttribute('data-gn');
+          const newName = prompt('新组名：', oldName);
+          if (!newName || !newName.trim() || newName.trim() === oldName) return;
+          const grps = loadGroups();
+          if (grps[newName.trim()]) { toastr?.warning?.('组名已存在'); return; }
+          grps[newName.trim()] = grps[oldName];
+          delete grps[oldName];
+          await saveGroups(grps);
+          renderGrpPage();
+          toastr?.success?.('已重命名');
+        };
+      });
+    };
+    renderGrpPage();
+  });
   // Filter listeners
   root.querySelectorAll('[data-mf]').forEach(btn => {
     btn.onclick = () => {
@@ -2000,7 +2086,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   $('mp_xs').oninput=()=>{renderXb();const items=$('mp_xl')?.querySelectorAll('.xi');$('mp_xcount').textContent=items?.length?items.length+'条':'';};
   $('mp_xty').onchange=renderXb;$('mp_xwt').onchange=renderXb;
-  $('mp_xtop').onclick=()=>{const bd=root.querySelector('.bd');if(bd)bd.scrollTop=0;};
+
 
   // XB locate: clear search, show full list, scroll to target event
   window._mpXLocate=(eid)=>{
@@ -2136,11 +2222,36 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const skwH = (merged.secondaryKeywords||[]).map(k=>'<span class="kw kx">'+h(k)+'</span>').join('');
       const ekwH = (merged.entityKeywords||[]).map(k=>'<span class="kw ke">'+h(k)+'</span>').join('');
       const frH = formatFloorSegments(merged);
-      $('mp_merge_status').innerHTML = '<div class="mi" style="border-color:rgba(124,107,240,0.4)"><div class="mh"><span class="me">[预览 - 可编辑]</span><span class="bp bpm">'+h(prio)+'</span></div><div class="fg"><label>事件名</label><input id="mp_mpv_event" value="'+h(merged.event)+'"></div><div class="fg"><label>摘要</label><textarea id="mp_mpv_summary" style="min-height:80px">'+h(merged.summary)+'</textarea></div><div class="fg"><label>时间标签</label><input id="mp_mpv_time" value="'+h(merged.timeLabel||'')+'"></div><div class="fg"><label>主关键词（逗号分隔）</label><input id="mp_mpv_pk" value="'+h((merged.primaryKeywords||[]).join(', '))+'"></div><div class="fg"><label>门控关键词（逗号分隔）</label><input id="mp_mpv_sk" value="'+h((merged.secondaryKeywords||[]).join(', '))+'"></div><div class="fg"><label>人物关键词（逗号分隔）</label><input id="mp_mpv_ek" value="'+h((merged.entityKeywords||[]).join(', '))+'"></div><div class="ma" style="margin-top:8px"><button class="btn bp1" id="mp_merge_confirm">确认合并（删除原记忆）</button><button class="btn bd1" id="mp_merge_cancel">放弃</button></div></div>';
+      $('mp_merge_status').innerHTML = '<div class="mi" style="border-color:rgba(124,107,240,0.4)"><div class="mh"><span class="me">'+h(merged.event)+'</span><span class="bp bpm">'+h(prio)+'</span></div>'+(merged.timeLabel?'<div class="ht">'+h(merged.timeLabel)+(frH?' | '+frH:'')+'</div>':'')+'<div class="ms">'+h(merged.summary)+'</div><div class="kr">'+pkwH+skwH+ekwH+'</div><div class="ma" style="margin-top:8px"><button class="btn bp1" id="mp_merge_confirm">确认合并</button><button class="btn" id="mp_merge_edit">编辑后确认</button><button class="btn bd1" id="mp_merge_cancel">放弃</button></div></div>';
       await savePendingOp('merge', { status:'done', message: merged.event, results: [merged] });
       window._mpMergePreview = { merged: merged, sourceIds: ids };
       const confirmBtn = document.getElementById('mp_merge_confirm');
+      const editBtn = document.getElementById('mp_merge_edit');
       const cancelBtn = document.getElementById('mp_merge_cancel');
+      // "编辑后确认": load merged data into edit form
+      if (editBtn) {
+        editBtn.addEventListener('click', function onEdit() {
+          editBtn.removeEventListener('click', onEdit);
+          const preview = window._mpMergePreview;
+          if (!preview) { toastr?.warning?.('预览数据丢失'); return; }
+          // Store merge context so save can finalize
+          window._mpMergePendingEdit = preview;
+          const m = preview.merged;
+          editId = m.id;
+          $('mp_fe').value = m.event || '';
+          $('mp_fpk').value = (m.primaryKeywords||[]).join(', ');
+          $('mp_fsk').value = (m.secondaryKeywords||[]).join(', ');
+          $('mp_fek').value = (m.entityKeywords||[]).join(', ');
+          $('mp_ft').value = m.timeLabel || '';
+          $('mp_ftv').value = Number.isFinite(Number(m.timeValue)) ? String(m.timeValue) : '';
+          $('mp_ffr').value = Array.isArray(m.floorRange) ? m.floorRange[0]+'-'+m.floorRange[1] : '';
+          $('mp_fa').value = '';
+          $('mp_fs').value = m.summary || '';
+          $('mp_fp').value = m.priority || 'medium';
+          root.querySelector('.tab[data-t="add"]').click();
+          toastr?.info?.('已加载到编辑表单，修改后点「保存」完成合并');
+        });
+      }
       if(confirmBtn) {
         confirmBtn.addEventListener('click', async function onConfirm() {
           confirmBtn.removeEventListener('click', onConfirm);
@@ -2148,14 +2259,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           try {
             const preview = window._mpMergePreview;
             if (!preview) { toastr?.warning?.('预览数据丢失'); return; }
-            // Read edited values from preview form
             const editedMerged = { ...preview.merged };
-            const _ev = $('mp_mpv_event')?.value?.trim(); if (_ev) editedMerged.event = _ev;
-            const _sm = $('mp_mpv_summary')?.value?.trim(); if (_sm) editedMerged.summary = _sm;
-            const _tl = $('mp_mpv_time')?.value?.trim(); editedMerged.timeLabel = _tl || editedMerged.timeLabel;
-            const _pk = $('mp_mpv_pk')?.value; if (_pk != null) editedMerged.primaryKeywords = _pk.split(/[,，]/).map(k=>k.trim()).filter(Boolean);
-            const _sk = $('mp_mpv_sk')?.value; if (_sk != null) editedMerged.secondaryKeywords = _sk.split(/[,，]/).map(k=>k.trim()).filter(Boolean);
-            const _ek = $('mp_mpv_ek')?.value; if (_ek != null) editedMerged.entityKeywords = _ek.split(/[,，]/).map(k=>k.trim()).filter(Boolean);
             window._mpMergeUndo = { deletedMems: preview.sourceIds.map(id => memories.find(m => m.id === id)).filter(Boolean), mergedId: editedMerged.id };
             for (const id of preview.sourceIds) { memories = memories.filter(m => m.id !== id); }
             memories = upsertMemory(memories, editedMerged);
