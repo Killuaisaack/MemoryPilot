@@ -380,86 +380,81 @@ function isActivated() {
   } catch { return false; }
 }
 
-function showActivationDialog() {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif';
-    overlay.innerHTML = `
-      <div style="background:#222327;border-radius:14px;padding:24px 28px;max-width:360px;width:90%;border:1px solid rgba(255,255,255,0.1);box-shadow:0 16px 50px rgba(0,0,0,0.6)">
-        <h3 style="color:#fff;margin:0 0 12px;font-size:16px">🧭 MemoryPilot 激活</h3>
-        <p style="color:#aaa;font-size:12px;margin:0 0 16px;line-height:1.5">请输入激活码以使用 MemoryPilot v3.5。<br>一次验证，永久有效（同浏览器）。</p>
-        <input id="mp_act_code" type="text" placeholder="请输入激活码…" style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.3);color:#eee;font-size:14px;box-sizing:border-box;margin-bottom:12px">
-        <div id="mp_act_err" style="color:#f87171;font-size:11px;margin-bottom:10px;display:none"></div>
-        <div style="display:flex;gap:8px">
-          <button id="mp_act_submit" style="flex:1;padding:10px;border-radius:8px;border:none;background:rgba(124,107,240,0.8);color:#fff;font-size:13px;cursor:pointer;font-weight:600">激活</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-    const input = overlay.querySelector('#mp_act_code');
-    const errEl = overlay.querySelector('#mp_act_err');
-    const submit = overlay.querySelector('#mp_act_submit');
-    let checking = false;
-    const doSubmit = async () => {
-      if (checking) return;
-      checking = true;
-      submit.textContent = '验证中…';
-      submit.style.opacity = '0.6';
-      try {
-        const code = (input.value || '').trim().toUpperCase();
-        if (!code) { throw new Error('请输入激活码'); }
-        const hash = await sha256Hex(code);
-        if (MP_VALID_HASHES.has(hash)) {
-          try { localStorage.setItem(MP_ACTIVATION_KEY, 'true'); } catch {}
-          overlay.remove();
-          resolve(true);
-          return;
-        }
-        throw new Error('激活码无效，请重新输入。');
-      } catch (e) {
-        errEl.style.display = '';
-        errEl.textContent = e.message || '验证失败';
-        input.style.borderColor = 'rgba(248,113,113,0.5)';
-      } finally {
-        checking = false;
-        submit.textContent = '激活';
-        submit.style.opacity = '';
-      }
-    };
-    submit.onclick = doSubmit;
-    input.onkeydown = (e) => { if (e.key === 'Enter') doSubmit(); };
-    input.focus();
-  });
-}
+// showActivationDialog removed — activation is now inline in the settings panel
 
 jQuery(async () => {
   console.log(`[${MODULE_NAME}] Extension loaded (recall: ${getSettings().recallVersion})`);
-
-  // Activation check
-  if (!isActivated()) {
-    const ok = await showActivationDialog();
-    if (!ok) return;
-  }
 
   const ctx = SillyTavern.getContext();
   if (!ctx.extensionSettings[MODULE_NAME]) {
     ctx.extensionSettings[MODULE_NAME] = {};
   }
 
-  try {
-    await migrateIfNeeded();
-    const report = detectLegacyArtifacts();
-    if (report.hasLegacyMpMetadata || report.hasLegacyMpVars || report.lwbSnapHasMpTraces) {
-      toastr?.info?.('检测到当前聊天存在旧版 MP / LWB 快照痕迹，可在 MP 面板 → 过滤 中清理。');
-    }
-  } catch (e) { console.warn('[MP] startup migration err', e); }
-
-  // Settings panel in extensions drawer
+  // Settings panel always loads (so user can enter activation code)
   const html = buildSettingsHtml();
   $('#extensions_settings2').append(html);
   bindSettingsEvents();
 
-  // Buttons above chat input (like original taskjs)
+  // Activation check — if not activated, show inline activation UI, don't init features
+  if (!isActivated()) {
+    renderActivationUI();
+    return;
+  }
+
+  // Full init (only after activation)
+  initFeatures();
+});
+
+function renderActivationUI() {
+  // Show activation prompt inside the settings panel, not as a fullscreen overlay
+  const container = document.querySelector('.mp-settings-panel .inline-drawer-content');
+  if (!container) return;
+  const div = document.createElement('div');
+  div.id = 'mp_activation_inline';
+  div.style.cssText = 'padding:10px 0;border-top:1px solid rgba(255,255,255,0.08);margin-top:8px';
+  div.innerHTML = `
+    <div style="color:#fbbf24;font-size:12px;font-weight:600;margin-bottom:6px">🔒 需要激活码</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px">输入激活码后解锁全部功能。不影响酒馆其他功能。</div>
+    <div style="display:flex;gap:6px">
+      <input id="mp_act_code_inline" type="text" class="text_pole" placeholder="输入激活码…" style="flex:1">
+      <button id="mp_act_submit_inline" class="menu_button" style="white-space:nowrap">激活</button>
+    </div>
+    <div id="mp_act_err_inline" style="color:#f87171;font-size:11px;margin-top:4px;display:none"></div>
+  `;
+  container.appendChild(div);
+  const input = document.getElementById('mp_act_code_inline');
+  const submit = document.getElementById('mp_act_submit_inline');
+  const errEl = document.getElementById('mp_act_err_inline');
+  const doActivate = async () => {
+    const code = (input?.value || '').trim().toUpperCase();
+    if (!code) { errEl.style.display = ''; errEl.textContent = '请输入激活码'; return; }
+    const hash = await sha256Hex(code);
+    if (MP_VALID_HASHES.has(hash)) {
+      try { localStorage.setItem(MP_ACTIVATION_KEY, 'true'); } catch {}
+      div.innerHTML = '<div style="color:#4ade80;font-size:12px;padding:8px 0">✅ 激活成功！正在加载…</div>';
+      toastr?.success?.('MemoryPilot 已激活');
+      setTimeout(() => { initFeatures(); div.remove(); }, 500);
+    } else {
+      errEl.style.display = ''; errEl.textContent = '激活码无效';
+    }
+  };
+  submit?.addEventListener('click', doActivate);
+  input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doActivate(); });
+}
+
+function initFeatures() {
+  const ctx = SillyTavern.getContext();
+
+  try {
+    migrateIfNeeded().then(() => {
+      const report = detectLegacyArtifacts();
+      if (report.hasLegacyMpMetadata || report.hasLegacyMpVars || report.lwbSnapHasMpTraces) {
+        toastr?.info?.('检测到当前聊天存在旧版 MP / LWB 快照痕迹，可在 MP 面板 → 过滤 中清理。');
+      }
+    });
+  } catch (e) { console.warn('[MP] startup migration err', e); }
+
+  // Buttons above chat input
   addChatBarButtons();
 
   // Re-add buttons if chat area is rebuilt
@@ -468,4 +463,4 @@ jQuery(async () => {
   });
 
   hookRecall();
-});
+}

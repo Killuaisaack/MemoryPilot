@@ -2722,7 +2722,27 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       if (!enabled) {
         progEl.innerHTML = '<span style="color:#777">自动总结已关闭（在扩展面板开启）</span>';
       } else {
-        progEl.innerHTML = '已总结到 <b style="color:#fff">#' + lastFloor + '</b> / 共 ' + totalFloors + ' 层 · 未总结 <b style="color:#fbbf24">' + unsummarized + '</b> 层 · 下次触发于 #' + nextAt;
+        progEl.innerHTML = '已总结到 <b style="color:#fff">#' + lastFloor + '</b> / 共 ' + totalFloors + ' 层 · 未总结 <b style="color:#fbbf24">' + unsummarized + '</b> 层 · 下次触发于 #' + nextAt +
+          '<div style="display:flex;gap:5px;align-items:center;margin-top:6px">' +
+          '<input id="mp_auto_setfloor" type="number" min="0" max="' + totalFloors + '" value="' + lastFloor + '" style="width:80px;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.3);color:#eee;font-size:12px">' +
+          '<button class="btn" id="mp_auto_setfloor_btn" style="font-size:11px;padding:4px 10px">设为起始楼层</button>' +
+          '<button class="btn" id="mp_auto_setfloor_cur" style="font-size:11px;padding:4px 10px">跳到当前（#' + totalFloors + '）</button>' +
+          '</div>';
+        $('mp_auto_setfloor_btn')?.addEventListener('click', async () => {
+          const v = Number($('mp_auto_setfloor')?.value);
+          if (!Number.isFinite(v) || v < 0) { toastr?.warning?.('请输入有效楼层号'); return; }
+          store._lastAutoSummarizeFloor = Math.min(v, totalFloors);
+          _saveDebounced();
+          toastr?.success?.('自动总结起始楼层已设为 #' + store._lastAutoSummarizeFloor);
+          // Re-render
+          $('mp_auto_progress').innerHTML = '已更新，下次打开面板刷新显示';
+        });
+        $('mp_auto_setfloor_cur')?.addEventListener('click', async () => {
+          store._lastAutoSummarizeFloor = totalFloors;
+          _saveDebounced();
+          toastr?.success?.('已跳过全部历史，从当前楼层 #' + totalFloors + ' 开始');
+          $('mp_auto_progress').innerHTML = '已更新，下次打开面板刷新显示';
+        });
       }
       // History
       const history = store._autoSummarizeHistory || [];
