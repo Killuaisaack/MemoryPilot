@@ -1464,6 +1464,11 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           </details>
           <button class="btn bp1" id="mp_brun" style="width:100%;padding:9px;font-size:13px;margin-top:9px">开始分析</button>
           <div id="mp_br" style="margin-top:9px"></div>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)">
+            <div class="fg"><label style="font-size:12px;color:#fbbf24;font-weight:600">🔄 自动总结进度</label></div>
+            <div id="mp_auto_progress" class="ht" style="margin-bottom:6px">加载中…</div>
+            <div id="mp_auto_history"></div>
+          </div>
         </div>
         <div class="pg" id="mp_pg_cfg">
           <div class="fg"><label>召回周期（回合）</label><input id="mp_revery" type="number" min="1" max="50" value="${h(String(loadRecallCfg().every))}"></div>
@@ -1519,8 +1524,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           </div>
         </div>
       </div>
-      <button class="mp-top-btn" id="mp_gotop" title="回到顶部">↑</button>
-      <button class="mp-top-btn" id="mp_gobot" title="到底部" style="bottom:58px">↓</button>
+      <button class="mp-top-btn" id="mp_gotop" title="回到顶部" style="bottom:58px">↑</button>
+      <button class="mp-top-btn" id="mp_gobot" title="到底部">↓</button>
     </div>
   `;
   document.body.appendChild(root);
@@ -2702,6 +2707,35 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   // 面板打开时立即检查
   try { restorePendingBatch(); } catch {}
   try { renderCleanupSummary(); } catch {}
+  // Auto-summarize progress
+  try {
+    const store = _getStore();
+    const progEl = $('mp_auto_progress');
+    const histEl = $('mp_auto_history');
+    if (store && progEl) {
+      const lastFloor = store._lastAutoSummarizeFloor || 0;
+      const totalFloors = chat.length;
+      const interval = window.MemoryPilot?.getSettings?.()?.autoSummarizeEvery || 20;
+      const enabled = window.MemoryPilot?.getSettings?.()?.autoSummarize;
+      const unsummarized = totalFloors - lastFloor;
+      const nextAt = lastFloor + interval;
+      if (!enabled) {
+        progEl.innerHTML = '<span style="color:#777">自动总结已关闭（在扩展面板开启）</span>';
+      } else {
+        progEl.innerHTML = '已总结到 <b style="color:#fff">#' + lastFloor + '</b> / 共 ' + totalFloors + ' 层 · 未总结 <b style="color:#fbbf24">' + unsummarized + '</b> 层 · 下次触发于 #' + nextAt;
+      }
+      // History
+      const history = store._autoSummarizeHistory || [];
+      if (history.length && histEl) {
+        const statusLabels = { done: '✅', running: '⏳', error: '❌', error_no_api: '⚠️ API未配', empty: '⚪ 无结果' };
+        histEl.innerHTML = '<div class="ht" style="margin-bottom:4px">总结历史（最近）：</div>' + history.slice(-10).reverse().map(h_item => {
+          const st = statusLabels[h_item.status] || h_item.status;
+          const t = h_item.time ? new Date(h_item.time).toLocaleString() : '';
+          return '<div style="font-size:10px;color:#888;padding:1px 0">' + st + ' #' + (h_item.from||'?') + '-' + (h_item.to||'?') + (h_item.count ? ' (' + h_item.count + '条)' : '') + ' ' + t + '</div>';
+        }).join('');
+      }
+    }
+  } catch (e) { console.warn('[MP] auto progress render err', e); }
 
   $('mp_brun').onclick=async()=>{
     if(_abort){_abort.abort();_abort=null;$('mp_brun').textContent='开始分析';try{await savePendingOp('batch',{status:'error',error:'手动停止'});}catch{}return;}

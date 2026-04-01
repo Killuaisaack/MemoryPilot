@@ -205,13 +205,28 @@ function hookRecall() {
           const ck = String(c.chatId ?? c.chatMetadata?.chat_file_name ?? 'default') + '::' + charScope;
           if (store && store[ck]) {
             const lastAutoFloor = store[ck]._lastAutoSummarizeFloor || 0;
-            if (chatLen - lastAutoFloor >= interval) {
+            // Handle reroll/delete: if chat shortened, adjust marker down
+            if (chatLen < lastAutoFloor) {
               store[ck]._lastAutoSummarizeFloor = chatLen;
               saveSettings();
-              console.log('[MP] Auto-summarize triggered at floor ' + chatLen + ' (from ' + (lastAutoFloor + 1) + ')');
+              console.log('[MP] Auto-summarize: chat shortened (reroll/delete), adjusted marker to ' + chatLen);
+            }
+            // Track history of all summarized ranges
+            if (!store[ck]._autoSummarizeHistory) store[ck]._autoSummarizeHistory = [];
+            const effectiveLastFloor = Math.min(store[ck]._lastAutoSummarizeFloor || 0, chatLen);
+            // Trigger when enough new messages since last summarize point
+            if (chatLen - effectiveLastFloor >= interval) {
+              const fromIdx = effectiveLastFloor;
+              const toIdx = chatLen;
+              store[ck]._lastAutoSummarizeFloor = toIdx;
+              // Record this range
+              store[ck]._autoSummarizeHistory.push({ from: fromIdx + 1, to: toIdx, time: Date.now(), status: 'running' });
+              // Keep only last 50 history entries
+              if (store[ck]._autoSummarizeHistory.length > 50) store[ck]._autoSummarizeHistory = store[ck]._autoSummarizeHistory.slice(-50);
+              saveSettings();
+              console.log('[MP] Auto-summarize triggered: floor ' + (fromIdx + 1) + '-' + toIdx);
               // Run the actual analysis in background
               try {
-                // Read API config
                 const apiCfg = store[ck]?.mp_api_config || {};
                 const provider = apiCfg.provider || 'openai';
                 const model = apiCfg.model || '';
@@ -219,13 +234,12 @@ function hookRecall() {
                 const rawBase = apiCfg.url || '';
                 if (!key || !model) {
                   console.warn('[MP] Auto-summarize: API not configured');
+                  store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'error_no_api';
+                  saveSettings();
                 } else {
-                  // Build prompt from the shared analysis prompt
                   const promptTemplate = getCustomPrompt('analysis', null);
                   if (promptTemplate) {
                     const chat = c.chat || [];
-                    const fromIdx = Math.max(0, lastAutoFloor);
-                    const toIdx = Math.min(chatLen, chat.length);
                     const uL = c.name1 || '用户', cL = c.name2 || '角色';
                     const text = [];
                     for (let i = fromIdx; i < toIdx; i++) {
@@ -237,59 +251,45 @@ function hookRecall() {
                     }
                     if (text.length >= 3) {
                       const prompt = promptTemplate.replace('{{content}}', text.join('\n'));
-                      // Normalize base URL
                       const base = provider === 'claude'
                         ? String(rawBase || 'https://api.anthropic.com').replace(/\/+$/, '').replace(/\/v1\/messages$/i, '')
                         : provider === 'gemini'
                           ? String(rawBase || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '').replace(/\/models\/.*$/i, '')
                           : String(rawBase || '').replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
-                      // Call LLM
-                      let url, headers, body;
+                      let url, headers, reqBody;
                       if (provider === 'claude') {
                         url = base + '/v1/messages';
                         headers = { 'x-api-key': key, 'anthropic-version': apiCfg.anthropicVersion || '2023-06-01', 'content-type': 'application/json' };
-                        body = JSON.stringify({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
+                        reqBody = JSON.stringify({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
                       } else if (provider === 'gemini') {
                         url = base + '/models/' + encodeURIComponent(model) + ':generateContent';
                         headers = { 'x-goog-api-key': key, 'content-type': 'application/json' };
-                        body = JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 4096 } });
+                        reqBody = JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 4096 } });
                       } else {
                         url = base + '/chat/completions';
                         headers = { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' };
-                        body = JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: 4096 });
+                        reqBody = JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: 4096 });
                       }
-                      const res = await fetch(url, { method: 'POST', headers, body });
+                      const res = await fetch(url, { method: 'POST', headers, body: reqBody });
                       if (res.ok) {
                         const d = await res.json();
                         let resultText = '';
                         if (provider === 'claude') resultText = (d.content || []).filter(x => x?.type === 'text').map(x => x.text || '').join('\n');
-                        else if (provider === 'gemini') resultText = (d.candidates || []).flatMap(c => c?.content?.parts || []).map(p => p?.text || '').join('\n');
+                        else if (provider === 'gemini') resultText = (d.candidates || []).flatMap(cc => cc?.content?.parts || []).map(p => p?.text || '').join('\n');
                         else resultText = d.choices?.[0]?.message?.content || '';
-                        // Parse results and store as pending
                         const parsed = [];
-                        const lines = resultText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-                        for (const line of lines) {
-                          try {
-                            const raw = line.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
-                            const o = JSON.parse(raw);
-                            if (o && o.event && o.summary) parsed.push(o);
-                          } catch {}
-                        }
-                        if (!parsed.length) {
-                          // Try brace matching
-                          let depth = 0, start = -1;
-                          for (let i = 0; i < resultText.length; i++) {
-                            if (resultText[i] === '{') { if (depth === 0) start = i; depth++; }
-                            else if (resultText[i] === '}') { depth--; if (depth === 0 && start >= 0) {
-                              try { const o = JSON.parse(resultText.slice(start, i + 1)); if (o?.event && o?.summary) parsed.push(o); } catch {}
-                              start = -1;
-                            }}
-                          }
+                        let depth = 0, start = -1;
+                        for (let i = 0; i < resultText.length; i++) {
+                          if (resultText[i] === '{') { if (depth === 0) start = i; depth++; }
+                          else if (resultText[i] === '}') { depth--; if (depth === 0 && start >= 0) {
+                            try { const o = JSON.parse(resultText.slice(start, i + 1)); if (o?.event && o?.summary) parsed.push(o); } catch {}
+                            start = -1;
+                          }}
                         }
                         if (parsed.length) {
-                          const gid = () => 'mp_' + Math.random().toString(36).slice(2, 10);
+                          const mkid = () => 'mp_' + Math.random().toString(36).slice(2, 10);
                           const nms = parsed.map(o => ({
-                            ...o, id: gid(), timestamp: Date.now(),
+                            ...o, id: mkid(), timestamp: Date.now(),
                             primaryKeywords: Array.isArray(o.primaryKeywords) ? o.primaryKeywords : (Array.isArray(o.keywords) ? o.keywords : []),
                             secondaryKeywords: Array.isArray(o.secondaryKeywords) ? o.secondaryKeywords : [],
                             entityKeywords: Array.isArray(o.entityKeywords) ? o.entityKeywords : [],
@@ -297,21 +297,33 @@ function hookRecall() {
                             floorRange: Array.isArray(o.floorRange) && o.floorRange.length >= 2 ? o.floorRange : [fromIdx + 1, toIdx],
                             timeLabel: o.timeLabel || '第' + (fromIdx + 1) + '-' + toIdx + '层',
                           }));
-                          // Store as pending for user to confirm in panel
-                          try { localStorage.setItem('mp_pending_ops', JSON.stringify({ auto: { status: 'done', message: nms.length + '条自动提取', resultCount: nms.length, updatedAt: Date.now() } })); } catch {}
-                          try { localStorage.setItem('mp_pending_ops_results_auto', JSON.stringify(nms)); } catch {}
-                          toastr?.info?.('MemoryPilot 自动总结完成：提取 ' + nms.length + ' 条记忆，请在管理面板确认。');
-                          console.log('[MP] Auto-summarize done: ' + nms.length + ' memories extracted');
+                          // Append to existing pending auto results (not overwrite)
+                          let existing = [];
+                          try { const raw = localStorage.getItem('mp_pending_ops_results_auto'); if (raw) existing = JSON.parse(raw); } catch {}
+                          if (!Array.isArray(existing)) existing = [];
+                          const all = [...existing, ...nms];
+                          try { localStorage.setItem('mp_pending_ops', JSON.stringify({ auto: { status: 'done', message: all.length + '条自动提取（累计）', resultCount: all.length, updatedAt: Date.now() } })); } catch {}
+                          try { localStorage.setItem('mp_pending_ops_results_auto', JSON.stringify(all)); } catch {}
+                          // Update history
+                          store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'done';
+                          store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].count = nms.length;
+                          saveSettings();
+                          toastr?.info?.('MemoryPilot 自动总结完成（#' + (fromIdx + 1) + '-' + toIdx + '）：' + nms.length + ' 条，请在面板确认。');
                         } else {
-                          console.warn('[MP] Auto-summarize: LLM returned content but no valid JSON');
+                          store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'empty';
+                          saveSettings();
                         }
                       } else {
-                        console.warn('[MP] Auto-summarize API error: ' + res.status);
+                        store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'error_' + res.status;
+                        saveSettings();
                       }
                     }
                   }
                 }
-              } catch (autoErr) { console.warn('[MP] Auto-summarize LLM error:', autoErr); }
+              } catch (autoErr) {
+                console.warn('[MP] Auto-summarize LLM error:', autoErr);
+                try { store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'error'; saveSettings(); } catch {}
+              }
             }
           }
         }
