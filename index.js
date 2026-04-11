@@ -204,31 +204,42 @@ function hookRecall() {
           const charScope = String(charObj?.avatar ?? charObj?.name ?? c?.chatMetadata?.character_name ?? c?.name2 ?? '');
           const ck = String(c.chatId ?? c.chatMetadata?.chat_file_name ?? 'default') + '::' + charScope;
           if (store && store[ck]) {
+            const chatStore = store[ck];
             // First-time init: start from current position, not #0
-            if (store[ck]._lastAutoSummarizeFloor == null) {
-              store[ck]._lastAutoSummarizeFloor = chatLen;
+            if (chatStore._lastAutoSummarizeFloor == null) {
+              chatStore._lastAutoSummarizeFloor = chatLen;
               saveSettings();
               console.log('[MP] Auto-summarize: first init, start from #' + chatLen);
             }
-            const lastAutoFloor = store[ck]._lastAutoSummarizeFloor || 0;
-            // Reroll/delete: adjust marker down
+            const lastAutoFloor = chatStore._lastAutoSummarizeFloor || 0;
+            // Reroll/delete: adjust marker down + warn about orphaned memories
             if (chatLen < lastAutoFloor) {
-              store[ck]._lastAutoSummarizeFloor = chatLen;
+              chatStore._lastAutoSummarizeFloor = chatLen;
               saveSettings();
+              // Check if any memories reference floors beyond current chat length
+              try {
+                const mems = chatStore.mp_memories || [];
+                const orphaned = mems.filter(m => Array.isArray(m.floorRange) && m.floorRange[1] > chatLen);
+                if (orphaned.length) {
+                  toastr?.warning?.('检测到 ' + orphaned.length + ' 条记忆引用了已删除的楼层（#' + chatLen + ' 之后），建议在管理面板检查。');
+                  console.warn('[MP] ' + orphaned.length + ' memories reference deleted floors (>' + chatLen + '):', orphaned.map(m => m.event));
+                }
+              } catch {}
             }
-            if (!store[ck]._autoSummarizeHistory) store[ck]._autoSummarizeHistory = [];
-            const effectiveLastFloor = Math.min(store[ck]._lastAutoSummarizeFloor || 0, chatLen);
+            if (!chatStore._autoSummarizeHistory) chatStore._autoSummarizeHistory = [];
+            const effectiveLastFloor = Math.min(chatStore._lastAutoSummarizeFloor || 0, chatLen);
             // Skip if already running
             if (window._mpAutoSummarizeRunning) { /* wait */ }
             else if (chatLen - effectiveLastFloor >= interval) {
               const fromIdx = effectiveLastFloor;
               const toIdx = chatLen;
-              store[ck]._lastAutoSummarizeFloor = toIdx;
-              store[ck]._autoSummarizeHistory.push({ from: fromIdx + 1, to: toIdx, time: Date.now(), status: 'running' });
-              if (store[ck]._autoSummarizeHistory.length > 50) store[ck]._autoSummarizeHistory = store[ck]._autoSummarizeHistory.slice(-50);
+              chatStore._lastAutoSummarizeFloor = toIdx;
+              chatStore._autoSummarizeHistory.push({ from: fromIdx + 1, to: toIdx, time: Date.now(), status: 'running' });
+              if (chatStore._autoSummarizeHistory.length > 50) chatStore._autoSummarizeHistory = chatStore._autoSummarizeHistory.slice(-50);
               saveSettings();
               window._mpAutoSummarizeRunning = true;
               window._mpAutoSummarizeAbort = new AbortController();
+              toastr?.info?.('🔄 自动总结中（#' + (fromIdx + 1) + '-' + toIdx + '）…', '', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: true, toastClass: 'toast mp-auto-toast' });
               try {
                 const apiCfg = store[ck]?.mp_api_config || {};
                 const provider = apiCfg.provider || 'openai';
@@ -236,7 +247,8 @@ function hookRecall() {
                 const key = apiCfg.key || '';
                 const rawBase = apiCfg.url || '';
                 if (!key || !model) {
-                  store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'error_no_api';
+                  chatStore._lastAutoSummarizeFloor = fromIdx; // rollback
+                  chatStore._autoSummarizeHistory[chatStore._autoSummarizeHistory.length - 1].status = 'error_no_api';
                   saveSettings(); toastr?.warning?.('自动总结：API 未配置');
                 } else {
                   const promptTemplate = getCustomPrompt('analysis', null);
@@ -304,32 +316,40 @@ function hookRecall() {
                           const all = [...existing, ...nms];
                           try { localStorage.setItem('mp_pending_ops', JSON.stringify({ auto: { status: 'done', message: all.length + '条自动提取（累计）', resultCount: all.length, updatedAt: Date.now() } })); } catch {}
                           try { localStorage.setItem('mp_pending_ops_results_auto', JSON.stringify(all)); } catch {}
-                          store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'done';
-                          store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].count = nms.length;
+                          chatStore._autoSummarizeHistory[chatStore._autoSummarizeHistory.length - 1].status = 'done';
+                          chatStore._autoSummarizeHistory[chatStore._autoSummarizeHistory.length - 1].count = nms.length;
                           saveSettings();
                           toastr?.info?.('自动总结完成（#' + (fromIdx + 1) + '-' + toIdx + '）：' + nms.length + ' 条');
                         } else {
-                          store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'empty';
+                          chatStore._lastAutoSummarizeFloor = fromIdx; // rollback - no valid results
+                          chatStore._autoSummarizeHistory[chatStore._autoSummarizeHistory.length - 1].status = 'empty';
                           saveSettings();
                         }
                       } else {
-                        store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'error_' + res.status;
+                        chatStore._lastAutoSummarizeFloor = fromIdx; // rollback
+                        chatStore._autoSummarizeHistory[chatStore._autoSummarizeHistory.length - 1].status = 'error_' + res.status;
                         saveSettings();
+                        toastr?.error?.('自动总结API错误：' + res.status);
                       }
                     }
                   }
                 }
               } catch (autoErr) {
+                // Roll back floor marker so next trigger retries this range
+                chatStore._lastAutoSummarizeFloor = fromIdx;
                 if (autoErr?.name === 'AbortError') {
-                  store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'aborted';
+                  chatStore._autoSummarizeHistory[chatStore._autoSummarizeHistory.length - 1].status = 'aborted';
                   saveSettings(); toastr?.warning?.('自动总结已中止');
                 } else {
                   console.warn('[MP] Auto-summarize error:', autoErr);
-                  try { store[ck]._autoSummarizeHistory[store[ck]._autoSummarizeHistory.length - 1].status = 'error'; saveSettings(); } catch {}
+                  try { chatStore._autoSummarizeHistory[chatStore._autoSummarizeHistory.length - 1].status = 'error'; saveSettings(); } catch {}
+                  toastr?.error?.('自动总结失败：' + (autoErr?.message || autoErr));
                 }
               } finally {
                 window._mpAutoSummarizeRunning = false;
                 window._mpAutoSummarizeAbort = null;
+                // Clear persistent toastr
+                try { document.querySelectorAll('.mp-auto-toast').forEach(el => el.remove()); } catch {}
               }
             }
           }

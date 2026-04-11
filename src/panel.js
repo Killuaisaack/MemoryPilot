@@ -492,7 +492,10 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
 要求：
 1. event 格式为「地点·核心内容概括」，综合所有事件的核心。
-2. summary 长度 120-500 字，必须保留所有事件中的关键细节（具体台词、动作、物品、数字），按时间顺序组织，不要遗漏任何重要信息。
+2. summary 长度 100-300 字，必须保留所有事件中的关键细节（具体台词、动作、物品、数字）不要遗漏任何重要信息。必须保留关键细节，对剧情有推动作用的关键具体动作和身体语言进行高度浓缩
+- 总结前因后果的同时保留因果链：谁说/做了什么 → 对方什么反应 → 导致什么变化
+- 不要概括为"讨论了战争""表达了感情"，要写出具体说了什么、怎么表达的
+- 可以用分号连接多个连续动作，不需要每个动作单独成句；使用第三人称。
 3. timeLabel 取最早到最晚的时间跨度。
 4. timeValue 取最早事件的 timeValue，没有写 null。
 5. floorRange 取所有事件中最小起始楼层和最大结束楼层。
@@ -2761,7 +2764,12 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       // History
       const history = store._autoSummarizeHistory || [];
       if (history.length && histEl) {
-        const statusLabels = { done: '✅', running: '⏳', error: '❌', error_no_api: '⚠️ API未配', empty: '⚪ 无结果' };
+        const statusLabels = { done: '✅', running: '⏳', error: '❌', error_no_api: '⚠️ API未配', empty: '⚪ 无结果', aborted: '⏹ 已中止', timeout: '⏰ 超时' };
+        // Auto-fix stale running entries (>3 min old)
+        const now = Date.now();
+        for (const h_item of history) {
+          if (h_item.status === 'running' && now - (h_item.time || 0) > 180000) h_item.status = 'timeout';
+        }
         histEl.innerHTML = '<div class="ht" style="margin-bottom:4px">总结历史（最近）：</div>' + history.slice(-10).reverse().map(h_item => {
           const st = statusLabels[h_item.status] || h_item.status;
           const t = h_item.time ? new Date(h_item.time).toLocaleString() : '';
