@@ -2753,12 +2753,67 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         $('mp_auto_abort')?.addEventListener('click', () => {
           if (window._mpAutoSummarizeAbort) { window._mpAutoSummarizeAbort.abort(); toastr?.info?.('正在中止…'); }
         });
-        $('mp_auto_runnow')?.addEventListener('click', () => {
-          // Temporarily set marker back so next message triggers
-          store._lastAutoSummarizeFloor = Math.max(0, totalFloors - (interval + 1));
-          _saveDebounced();
-          toastr?.success?.('已重置标记，下一条消息将触发自动总结 #' + (store._lastAutoSummarizeFloor + 1) + '-' + totalFloors + '+');
-          $('mp_auto_progress').innerHTML = '已设置，发送下一条消息时触发总结';
+        $('mp_auto_runnow')?.addEventListener('click', async () => {
+          if (_abort) { toastr?.warning?.('已有分析在运行'); return; }
+          const fromFloor = lastFloor;
+          const toFloor = totalFloors;
+          if (toFloor <= fromFloor) { toastr?.warning?.('没有未总结的楼层'); return; }
+          const btn = $('mp_auto_runnow');
+          if (btn) { btn.disabled = true; btn.textContent = '总结中…'; }
+          $('mp_auto_progress').innerHTML = '<span style="color:#fbbf24">🔄 正在总结 #' + (fromFloor + 1) + '-' + toFloor + '…</span>';
+          _abort = new AbortController();
+          const uL = ctx.name1 || '用户', cL = ctx.name2 || '角色';
+          const cleaner = loadCleaner();
+          const indices = [];
+          for (let i = fromFloor; i < toFloor; i++) indices.push(i);
+          const text = indices.map(i => {
+            const m = chat[i]; if (!m) return '';
+            const body = cleaner.cleanForBatch ? applyCleaner(m.mes || '', cleaner) : String(m.mes || '');
+            if (!body.trim()) return '';
+            return '#' + (i + 1) + '[' + (m.is_user ? uL : (m.name || cL)) + ']' + body;
+          }).filter(Boolean).join('\n');
+          const prompt = loadPrompt().replace('{{content}}', text);
+          try {
+            const result = await callLLM(prompt, _abort.signal);
+            const parsed = extractAllJsonObjects(result);
+            const nms = [];
+            for (const o of parsed) {
+              if (o.event && o.summary) {
+                nms.push({ ...o, id: gid(), timestamp: Date.now(),
+                  primaryKeywords: Array.isArray(o.primaryKeywords) ? o.primaryKeywords : (Array.isArray(o.keywords) ? o.keywords : []),
+                  secondaryKeywords: Array.isArray(o.secondaryKeywords) ? o.secondaryKeywords : [],
+                  entityKeywords: Array.isArray(o.entityKeywords) ? o.entityKeywords : [],
+                  source: 'auto',
+                  floorRange: Array.isArray(o.floorRange) && o.floorRange.length >= 2 ? o.floorRange : [fromFloor + 1, toFloor],
+                  timeLabel: o.timeLabel || '第' + (fromFloor + 1) + '-' + toFloor + '层',
+                });
+              }
+            }
+            if (nms.length) {
+              store._lastAutoSummarizeFloor = toFloor;
+              if (!store._autoSummarizeHistory) store._autoSummarizeHistory = [];
+              store._autoSummarizeHistory.push({ from: fromFloor + 1, to: toFloor, time: Date.now(), status: 'done', count: nms.length });
+              _saveDebounced();
+              renderBatchResults(nms);
+              await savePendingOp('auto', { status: 'done', message: nms.length + '条手动总结', resultCount: nms.length });
+              try { localStorage.setItem('mp_pending_ops_results_auto', JSON.stringify(nms)); } catch {}
+              $('mp_auto_progress').innerHTML = '<span style="color:#4ade80">✅ 总结完成：' + nms.length + ' 条（#' + (fromFloor + 1) + '-' + toFloor + '）</span>';
+              toastr?.success?.('总结完成：' + nms.length + ' 条');
+            } else {
+              $('mp_auto_progress').innerHTML = '<span style="color:#f87171">未提取到有效记忆</span>';
+              toastr?.warning?.('LLM返回内容但未提取到记忆');
+            }
+          } catch (e) {
+            if (e?.name === 'AbortError') {
+              $('mp_auto_progress').innerHTML = '<span style="color:#888">已中止</span>';
+            } else {
+              $('mp_auto_progress').innerHTML = '<span style="color:#f87171">失败：' + h(e?.message || String(e)) + '</span>';
+              toastr?.error?.('总结失败：' + (e?.message || e));
+            }
+          } finally {
+            _abort = null;
+            if (btn) { btn.disabled = false; btn.textContent = '立即总结未处理的 ' + (totalFloors - (store._lastAutoSummarizeFloor || 0)) + ' 层'; }
+          }
         });
       }
       // History
