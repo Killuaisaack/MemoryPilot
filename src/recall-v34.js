@@ -208,7 +208,7 @@ export async function runRecall() {
     return text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
   };
 
-  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6 };
+  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6, groupRecall: true };
   const normalizeRecallSettings = (cfg) => {
     const src = cfg && typeof cfg === 'object' ? cfg : {};
     return {
@@ -216,7 +216,8 @@ export async function runRecall() {
       alpha: clamp(Number.isFinite(Number(src.alpha)) ? Number(src.alpha) : DEF_RECALL_SETTINGS.alpha, 0, 0.95),
       stickyTurns: clamp(Math.round(Number(src.stickyTurns) ?? DEF_RECALL_SETTINGS.stickyTurns), 0, 20),
       contextWindow: clamp(Math.round(Number(src.contextWindow) || DEF_RECALL_SETTINGS.contextWindow), 3, 30),
-      maxRecall: clamp(Math.round(Number(src.maxRecall) || DEF_RECALL_SETTINGS.maxRecall), 1, 20)
+      maxRecall: clamp(Math.round(Number(src.maxRecall) || DEF_RECALL_SETTINGS.maxRecall), 1, 20),
+      groupRecall: src.groupRecall !== false
     };
   };
 
@@ -544,6 +545,41 @@ export async function runRecall() {
     if (alreadySeen(mem)) continue;
     selected.push(mem);
     markSeen(mem);
+  }
+
+  // === Event group chain recall (fill remaining slots, scored) ===
+  const groupRecallEnabled = recallCfg.groupRecall !== false;
+  if (groupRecallEnabled) {
+    // Load event groups from extensionSettings
+    const _grpStore = _getStore();
+    const eventGroups = (_grpStore && _grpStore.mp_event_groups) ? _grpStore.mp_event_groups : {};
+    const selectedIdSet = new Set(selected.map(m => m.id));
+    const pinnedIdSet = new Set(pinned.map(m => m.id));
+    // Find groups that contain any selected memory
+    const activeGroups = new Set();
+    for (const [gn, members] of Object.entries(eventGroups)) {
+      if ((members||[]).some(mid => selectedIdSet.has(mid) || pinnedIdSet.has(mid))) activeGroups.add(gn);
+    }
+    // Collect group members not already selected, with their scores from primary[]
+    const chainCandidates = [];
+    for (const gn of activeGroups) {
+      for (const mid of (eventGroups[gn]||[])) {
+        if (selectedIdSet.has(mid) || pinnedIdSet.has(mid) || alreadySeen({id:mid})) continue;
+        const mem = memories.find(m => m.id === mid);
+        if (!mem) continue;
+        // Check if this memory was scored in primary pass
+        const scored = primary.find(p => p.id === mid);
+        const score = scored ? scored._score : 0.01;
+        chainCandidates.push({ ...mem, _score: score, _reason: '事件组[' + gn + ']补位' + (scored ? '(评分:' + score.toFixed(2) + ')' : '') });
+        markSeen(mem);
+      }
+    }
+    // Sort by score descending
+    chainCandidates.sort((a, b) => b._score - a._score);
+    const chainSlots = Math.max(0, maxTriggered - selected.length);
+    if (chainSlots > 0) {
+      selected.push(...chainCandidates.slice(0, chainSlots));
+    }
   }
 
   const finalPinned = dedupeByFingerprint(pinned);
