@@ -2760,7 +2760,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           if (toFloor <= fromFloor) { toastr?.warning?.('没有未总结的楼层'); return; }
           const btn = $('mp_auto_runnow');
           if (btn) { btn.disabled = true; btn.textContent = '总结中…'; }
-          $('mp_auto_progress').innerHTML = '<span style="color:#fbbf24">🔄 正在总结 #' + (fromFloor + 1) + '-' + toFloor + '…</span>';
+          $('mp_auto_progress').innerHTML = '<span style="color:#fbbf24">🔄 正在总结 #' + (fromFloor + 1) + '-' + toFloor + '…</span> <button class="btn bd1" id="mp_auto_abort_manual" style="font-size:11px;padding:3px 8px;margin-left:6px">中止</button>';
+          $('mp_auto_abort_manual')?.addEventListener('click', () => { if (_abort) { _abort.abort(); } });
           _abort = new AbortController();
           const uL = ctx.name1 || '用户', cL = ctx.name2 || '角色';
           const cleaner = loadCleaner();
