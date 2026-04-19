@@ -208,7 +208,7 @@ export async function runRecall() {
     return text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
   };
 
-  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6 };
+  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6, groupRecall: true };
   const normalizeRecallSettings = (cfg) => {
     const src = cfg && typeof cfg === 'object' ? cfg : {};
     return {
@@ -524,7 +524,37 @@ export async function runRecall() {
     markSeen(mem);
   }
 
-  const finalPinned = dedupeByFingerprint(pinned);
+  // === Event group chain recall (fill remaining slots) ===
+  {
+    const _grpStore = _getStore();
+    const eventGroups = (_grpStore && _grpStore.mp_event_groups) ? _grpStore.mp_event_groups : {};
+    const recallSettings = normalizeRecallSettings(await loadJson(RK, DEF_RECALL_SETTINGS));
+    if (recallSettings.groupRecall !== false) {
+      const selectedIdSet = new Set(selected.map(m => m.id));
+      const pinnedIdSet = new Set(pinned.map(m => m.id));
+      const activeGroups = new Set();
+      for (const [gn, members] of Object.entries(eventGroups)) {
+        if ((members||[]).some(mid => selectedIdSet.has(mid) || pinnedIdSet.has(mid))) activeGroups.add(gn);
+      }
+      const chainCandidates = [];
+      for (const gn of activeGroups) {
+        for (const mid of (eventGroups[gn]||[])) {
+          if (selectedIdSet.has(mid) || pinnedIdSet.has(mid)) continue;
+          const mem = memories.find(m => m.id === mid);
+          if (!mem) continue;
+          const fp = memFingerprint(mem);
+          if (fp && seenPrints.has(fp)) continue;
+          chainCandidates.push({ ...mem, _score: 0.01, _reason: '事件组[' + gn + ']补位' });
+          if (fp) seenPrints.add(fp);
+        }
+      }
+      chainCandidates.sort((a, b) => b._score - a._score);
+      const chainSlots = Math.max(0, maxTriggered - selected.length);
+      if (chainSlots > 0) selected.push(...chainCandidates.slice(0, chainSlots));
+    }
+  }
+
+    const finalPinned = dedupeByFingerprint(pinned);
   const finalSelected = dedupeByFingerprint(selected).slice(0, maxTriggered);
 
   // Sticky 机制：被召回的记忆写入 sticky，下次非评估轮也能注入

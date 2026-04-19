@@ -208,7 +208,7 @@ export async function runRecall() {
     return text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
   };
 
-  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6 };
+  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6, groupRecall: true };
   const normalizeRecallSettings = (cfg) => {
     const src = cfg && typeof cfg === 'object' ? cfg : {};
     return {
@@ -216,7 +216,8 @@ export async function runRecall() {
       alpha: clamp(Number.isFinite(Number(src.alpha)) ? Number(src.alpha) : DEF_RECALL_SETTINGS.alpha, 0, 0.95),
       stickyTurns: clamp(Math.round(Number(src.stickyTurns) ?? DEF_RECALL_SETTINGS.stickyTurns), 0, 20),
       contextWindow: clamp(Math.round(Number(src.contextWindow) || DEF_RECALL_SETTINGS.contextWindow), 3, 30),
-      maxRecall: clamp(Math.round(Number(src.maxRecall) || DEF_RECALL_SETTINGS.maxRecall), 1, 20)
+      maxRecall: clamp(Math.round(Number(src.maxRecall) || DEF_RECALL_SETTINGS.maxRecall), 1, 20),
+      groupRecall: src.groupRecall !== false
     };
   };
 
@@ -428,14 +429,32 @@ export async function runRecall() {
     if (!primaryKws.length) continue;
     const secondaryKws = cleanSecondaryKeywords(mem);
     
-    
+    // v3.6: Expand context matching with entity aliases
+    // If context mentions an alias (e.g. "月神"), treat it as if the primary name was mentioned too
+    const aliases = mem?.entityAliases || {};
+    let expandedCtxText = contextText;
+    let expandedCtxSet = ctxSet;
+    for (const [primaryName, aliasList] of Object.entries(aliases)) {
+      if (!Array.isArray(aliasList)) continue;
+      for (const alias of aliasList) {
+        const aliasNorm = norm(alias);
+        if (aliasNorm && (contextNorm.includes(aliasNorm) || ctxSet.has(aliasNorm))) {
+          // Alias found in context → add primary name to context set for matching
+          const nameNorm = norm(primaryName);
+          if (nameNorm && !expandedCtxSet.has(nameNorm)) {
+            if (expandedCtxSet === ctxSet) expandedCtxSet = new Set(ctxSet); // copy-on-write
+            expandedCtxSet.add(nameNorm);
+          }
+        }
+      }
+    }
 
-    const primaryMatch = matchKeywordGroup(contextText, ctxSet, primaryKws);
+    const primaryMatch = matchKeywordGroup(contextText, expandedCtxSet, primaryKws);
     if (primaryMatch.hitCount <= 0) continue;
     if (primaryMatch.exactHitCount <= 0 && primaryMatch.weakHitCount < 2) continue;
 
     const secondaryMatch = secondaryKws.length
-      ? matchKeywordGroup(contextText, ctxSet, secondaryKws)
+      ? matchKeywordGroup(contextText, expandedCtxSet, secondaryKws)
       : { exact: [], weak: [], exactHitCount: 0, weakHitCount: 0, hitCount: 0 };
 
     // Secondary keywords: soft gate (miss = penalty, not skip)
@@ -464,7 +483,14 @@ export async function runRecall() {
     const floorDist = floorRangeDistance(memFloorRange, currentFloorRange);
     const alphaBase = Number.isFinite(Number(mem?.alpha)) ? clamp(Number(mem.alpha), 0, 0.95) : recallCfg.alpha;
     const distanceAlpha = calcDynamicAlpha(alphaBase, floorDist, ageNorm);
-      const freshness = 1 - distanceAlpha;
+
+    // v3.6: Recall frequency reward — memories recalled often get α dampening
+    // recallCount stored per-memory, incremented each time it's selected
+    const recallCount = Number(mem?._recallCount) || 0;
+    // Frequency factor: log2(1+count) * 0.08, capped at 0.3 reduction
+    const frequencyReward = Math.min(0.3, Math.log2(1 + recallCount) * 0.08);
+    const effectiveAlpha = clamp(distanceAlpha - frequencyReward, 0, 0.95);
+    const freshness = 1 - effectiveAlpha;
     
     
     
@@ -477,11 +503,30 @@ export async function runRecall() {
     const totalGateKeywords = primaryKws.length + secondaryKws.length;
     const keywordScore = totalGateKeywords ? Math.min(1, (exactHitCount + weakHitCount * 0.6) / totalGateKeywords) : 0;
     
-    
+    // v3.6: NPC frequency-aware keyword bonus
+    // If a keyword matches a rare entity (NPC with role=minor or low entity frequency),
+    // it gets a bonus. If it matches a major character name, no bonus (too common).
+    let npcBonus = 0;
+    const entityRole = mem?.entityRole || {}; // { "老布": "minor", "阿尔忒弥斯": "major" }
+    const entityAliases = mem?.entityAliases || {}; // { "阿尔忒弥斯": ["月神","Artemis"] }
+    for (const kw of matchedKeywords) {
+      const kwNorm = norm(kw);
+      // Check if this keyword matches a minor NPC name or alias
+      for (const [name, role] of Object.entries(entityRole)) {
+        if (role === 'minor' || role === 'npc') {
+          const aliases = [norm(name), ...(entityAliases[name] || []).map(norm)];
+          if (aliases.includes(kwNorm)) {
+            npcBonus += 0.05; // minor NPC name match = significant signal
+            break;
+          }
+        }
+      }
+    }
+
     const isLow = mem.priority === 'low';
     const pw = isLow ? 0.15 : (mem.priority === 'medium' ? 0.5 : 0.3);
     const secondaryMul = secondaryMiss ? 0.4 : 1.0;
-    const score = Math.max(0.01, (keywordScore * 0.65 + pw * 0.10 + freshness * 0.15) * secondaryMul);
+    const score = Math.max(0.01, (keywordScore * 0.65 + pw * 0.10 + freshness * 0.15 + npcBonus) * secondaryMul);
 
     const reasons = [];
     if (isLow) reasons.push('低优先级');
@@ -491,7 +536,9 @@ export async function runRecall() {
       if (secondaryMatch.exact.length) reasons.push(`门控关键词硬命中 ${secondaryMatch.exactHitCount}: ${secondaryMatch.exact.join(', ')}`);
       if (secondaryMatch.weak.length) reasons.push(`门控关键词弱匹配 ${secondaryMatch.weakHitCount}: ${secondaryMatch.weak.join(', ')}`);
     }
-    reasons.push(Number.isFinite(floorDist) ? `楼层距离 ${floorDist} → α=${distanceAlpha.toFixed(2)}（基准 ${alphaBase.toFixed(2)}）` : `索引衰减 α=${distanceAlpha.toFixed(2)}（基准 ${alphaBase.toFixed(2)}）`);
+    if (npcBonus > 0) reasons.push(`NPC名加权 +${npcBonus.toFixed(2)}`);
+    if (frequencyReward > 0) reasons.push(`召回频率奖励 ×${recallCount} → α减${frequencyReward.toFixed(2)}`);
+    reasons.push(Number.isFinite(floorDist) ? `楼层距离 ${floorDist} → α=${effectiveAlpha.toFixed(2)}（基准 ${alphaBase.toFixed(2)}${frequencyReward > 0 ? ' -freq' + frequencyReward.toFixed(2) : ''}）` : `索引衰减 α=${effectiveAlpha.toFixed(2)}（基准 ${alphaBase.toFixed(2)}）`);
     
 
     primary.push({
@@ -499,7 +546,7 @@ export async function runRecall() {
       _score: score,
       _reason: reasons.join('；'),
       _matchedKeywords: matchedKeywords,
-      _debugScore: { keywordScore, pw, score, exactHitCount, weakHitCount, distanceAlpha, ageNorm }
+      _debugScore: { keywordScore, pw, score, exactHitCount, weakHitCount, distanceAlpha: effectiveAlpha, ageNorm, npcBonus, frequencyReward, recallCount }
     });
   }
 
@@ -546,8 +593,58 @@ export async function runRecall() {
     markSeen(mem);
   }
 
+  // === Event group chain recall (fill remaining slots, scored) ===
+  const groupRecallEnabled = recallCfg.groupRecall !== false;
+  if (groupRecallEnabled) {
+    // Load event groups from extensionSettings
+    const _grpStore = _getStore();
+    const eventGroups = (_grpStore && _grpStore.mp_event_groups) ? _grpStore.mp_event_groups : {};
+    const selectedIdSet = new Set(selected.map(m => m.id));
+    const pinnedIdSet = new Set(pinned.map(m => m.id));
+    // Find groups that contain any selected memory
+    const activeGroups = new Set();
+    for (const [gn, members] of Object.entries(eventGroups)) {
+      if ((members||[]).some(mid => selectedIdSet.has(mid) || pinnedIdSet.has(mid))) activeGroups.add(gn);
+    }
+    // Collect group members not already selected, with their scores from primary[]
+    const chainCandidates = [];
+    for (const gn of activeGroups) {
+      for (const mid of (eventGroups[gn]||[])) {
+        if (selectedIdSet.has(mid) || pinnedIdSet.has(mid) || alreadySeen({id:mid})) continue;
+        const mem = memories.find(m => m.id === mid);
+        if (!mem) continue;
+        // Check if this memory was scored in primary pass
+        const scored = primary.find(p => p.id === mid);
+        const score = scored ? scored._score : 0.01;
+        chainCandidates.push({ ...mem, _score: score, _reason: '事件组[' + gn + ']补位' + (scored ? '(评分:' + score.toFixed(2) + ')' : '') });
+        markSeen(mem);
+      }
+    }
+    // Sort by score descending
+    chainCandidates.sort((a, b) => b._score - a._score);
+    const chainSlots = Math.max(0, maxTriggered - selected.length);
+    if (chainSlots > 0) {
+      selected.push(...chainCandidates.slice(0, chainSlots));
+    }
+  }
+
   const finalPinned = dedupeByFingerprint(pinned);
   const finalSelected = dedupeByFingerprint(selected).slice(0, maxTriggered);
+
+  // v3.6: Increment recall frequency counter for selected memories
+  const triggeredIdSet = new Set(finalSelected.map(m => m.id));
+  let recallCountChanged = false;
+  for (const mem of memories) {
+    if (mem?.id && triggeredIdSet.has(mem.id)) {
+      mem._recallCount = (Number(mem._recallCount) || 0) + 1;
+      recallCountChanged = true;
+    }
+  }
+  // Persist updated recall counts (debounced via syncMeta)
+  if (recallCountChanged) {
+    const store = _getStore();
+    if (store) { store.mp_memories = memories; _saveDebounced(); }
+  }
 
   // Sticky 机制：被召回的记忆写入 sticky，下次非评估轮也能注入
   const triggeredIds = new Set(finalSelected.map(m => m.id));

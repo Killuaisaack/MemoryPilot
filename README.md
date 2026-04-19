@@ -1,185 +1,159 @@
-# 🧭 MemoryPilot
+# 🧭 MemoryPilot v4.0.0
 
-**SillyTavern 可控记忆管理系统** — 半插件化架构，适配 LWB (LittleWhiteBox) https://github.com/RT15548/LittleWhiteBox
+**SillyTavern 可控记忆管理系统** — 自动总结 + 分层永久记忆 + 时间线 + 待办事项 + NPC 关系网 + AI 智能召回
 
-为角色扮演 / 长期对话场景提供 **可控、可编辑、可解释** 的记忆召回能力。你可以精确管理 AI 在每轮对话中"想起"什么、忽略什么。
+独立运行，不依赖任何其他插件。可选桥接 LWB (LittleWhiteBox) XB 事件导入。
+
+---
+
+## 一句话概括
+
+自动总结每 N 条消息 → 一次 API 调用同时产出：关键词召回记忆 + 人物/场景/动态锚点 + 时间线 + 待办事项。锚点和时间线永久注入，待办事项常驻到完成，NPC 和场景信息只在被提到时才注入。
+
+---
+
+## 系统架构
+
+```
+一次自动总结 API 调用 →
+  ├── A类：关键词召回记忆（event/summary/primaryKeywords/...）
+  │         → 存入记忆列表 → 关键词匹配触发召回
+  │
+  └── B类：分层数据（自动写入，无需确认）
+            ├── 人物锚点（identity）  → 提到时注入
+            ├── 场景锚点（scene）     → 提到时注入
+            ├── 动态锚点（dynamics）  → 每轮注入
+            ├── 时间线（timeline）    → 每轮注入
+            └── 待办事项（todo）      → 每轮注入，完成后删除
+```
+
+### 注入逻辑
+
+| 数据类型 | 注入时机 | 注入变量 |
+|---|---|---|
+| 时间线 | 每轮（常驻） | `mp_layered_ctx` |
+| 待办事项 | 每轮（常驻，完成后消失） | `mp_layered_ctx` |
+| 动态锚点 | 每轮（关系变化始终相关） | `mp_layered_ctx` |
+| 人物锚点 | **条件注入**：最近对话提到该 NPC 名字或别名时 | `mp_layered_ctx` |
+| 场景锚点 | **条件注入**：最近对话提到该场景名或标签时 | `mp_layered_ctx` |
+| 置顶记忆 | 每轮 | `mp_recall_pin` |
+| 关键词召回 | 匹配时 | `mp_recall_ctx` |
+| AI 回忆叙事 | 手动触发 | `mp_recall_narrative` |
 
 ---
 
 ## 核心功能
 
-### 📋 记忆管理面板
+### 📋 待办事项（v4 新增）
 
-- **查看 / 搜索 / 编辑** 所有记忆条目（事件名、摘要、关键词、时间标签、楼层范围）
-- **手动添加** 新记忆，或从 LWB 事件 (XB Events) 导入
-- **批量操作**：选中多条记忆进行 AI 关键词重构、事件合并、批量删除
-- **三层关键词体系**：primaryKeywords（主触发）、secondaryKeywords（辅助门控）、entityKeywords（实体标记）
-- **优先级分级**：high（始终置顶）、medium（默认参与评分）、low（保底召回）
-- **导入 / 导出**：JSON 格式，支持覆盖或追加模式
+解决"总结+隐藏楼层后，AI 忘记之前的约定"问题。
 
-### 🔍 召回引擎
+- 角色说"明天下午3点咖啡馆见" → 自动总结时 AI 提取为待办 → 常驻注入直到你标记完成
+- 在 ⚓ 面板 → 📋 待办 Tab 管理：添加/编辑/完成/删除
+- 注入格式：`<待办事项与约定> · 明天下午3点在咖啡馆见面（D7下午3点）</待办事项与约定>`
 
-每条用户消息后自动执行，基于当前对话上下文匹配最相关的记忆注入 prompt：
+### 👤 NPC 条件注入（v4 新增）
 
-- **关键词精确匹配 + 模糊匹配**：CJK n-gram 分词，适配中文场景
-- **评分公式**：`score = (keywordScore × 0.65 + priorityWeight × 0.10 + freshness × 0.15) × secondaryMul`
-- **Sticky 机制**：被召回的记忆在后续若干轮保持注入，避免"一闪而过"
-- **节奏控制**：每 N 轮执行一次完整评估（`recallEvery`），中间轮沿用上次结果
-- **文本清洗**：自动去除 `<think>`、`<details>` 等标签块和自定义行前缀
-- **上下文窗口**：只分析最近 N 条消息（`contextWindow`），聚焦当前话题
+不是所有 NPC 信息都常驻注入（浪费 token），而是**提到谁就注入谁**。
 
-#### 双版本召回引擎（可切换）
+- 对话里出现"老布" → 注入老布的人物锚点
+- 对话里没提到老布 → 不注入，省 token
+- 场景锚点同理：提到"D-12舱室"才注入舱室细节
+- 匹配方式：NPC 名字 + 别名（`aliases`）+ 场景标签（`tags`）
 
-| | v34（推荐） | v32（经典） |
-|---|---|---|
-| low 优先级 | 分层选择：medium 优先填槽，low 保底至少 1 个槽位 | 跳过 low 优先级 |
-| 评分权重 | low=0.15, medium=0.5, default=0.3 | medium=0.5, default=0.2 |
-
-### 🔧 API 配置面板
-
-- 支持 **OpenAI / Claude / Gemini** 三种 provider
-- 可配置 base URL、model、temperature、top_p、max_tokens 等
-- 用于 AI 分析（提取记忆）、关键词重构、事件合并等操作
-- API 配置独立于 SillyTavern 主 API，不影响对话生成
-
-### 📊 召回监控面板
-
-- **实时预览** 当前轮的召回结果（置顶 + 触发的记忆）
-- **对比视图**：预测结果 vs 实际注入内容
-- **评分详情**：每条记忆的匹配原因（关键词命中、权重、新鲜度）
-- **可编辑**：直接在监控面板中删除或调整记忆
-
-### ✏️ 自定义 Prompt
-
-三种 Prompt 模板均可自定义，编辑后自动保存、跨聊天共享、跨设备同步：
-
-| Prompt | 用途 | 变量 |
-|--------|------|------|
-| 分析 Prompt | AI 分析聊天内容，提取记忆 | `{{context}}` |
-| 关键词重构 Prompt | AI 为记忆重构三层关键词 | `{{event}}` `{{summary}}` `{{entities}}` |
-| 事件合并 Prompt | AI 合并多条记忆为一条 | `{{memories}}` `{{context}}` |
-
----
-
-## 安装
-
-### 方法 1：通过 GitHub 安装（推荐）
-
-1. SillyTavern → 扩展面板 → **Install Extension**
-2. 输入仓库 URL：`https://github.com/<你的用户名>/MemoryPilot`
-3. 安装完成后刷新页面
-
-### 方法 2：手动安装
-
-将此文件夹放入：
-```
-public/scripts/extensions/third-party/MemoryPilot/
-```
-
-### 迁移注意
-
-安装后请 **禁用或删除** 原来 taskjs 中的四个 MP 任务，避免冲突。首次加载会自动迁移旧数据。
-
----
-
-## 存储架构
-
-### 为什么重新设计
-
-旧版 taskjs 使用 `STscript /setvar` 写入变量层。但 LWB 的快照机制会把变量层中的所有变量按楼层整包拍照存入 `LWB_SNAP`。
-
-**实测数据**（来自一个 953 楼的聊天）：
-- `LWB_SNAP` 总大小：**25.6 MB**
-- 其中 MP 变量重复拷贝：**25.5 MB（占 99.7%）**
-- `mp_memories`（40KB）× 951 个快照 ≈ 20.5 MB
-- `mp_recall_ctx`（12KB）× 951 个快照 ≈ 5.0 MB
-- LWB 自身数据仅占 **0.07 MB（0.3%）**
-
-换句话说，一个 26MB 的聊天文件里，消息只占 0.03MB，剩下几乎全是 MP 变量被 LWB 反复快照。
-
-### 新存储分层
-
-```
-extensionSettings (settings.json — 独立于聊天文件，服务端同步)
-├── MemoryPilot/
-│   ├── <chatKey>/
-│   │   ├── mp_memories: [...]        ← 记忆主体
-│   │   ├── mp_api_config: {...}      ← API 配置
-│   │   ├── mp_kw_blacklist: [...]    ← 关键词黑名单
-│   │   ├── stickyState: {...}        ← Sticky 状态
-│   │   └── mp_recall_settings: {}    ← 召回设置
-│   └── _global/
-│       ├── recallVersion: 'v34'      ← 引擎版本
-│       └── customPrompts: {}         ← 自定义 Prompt
-
-chatMetadata.variables (仅供 {{getvar::}} 宏读取)
-├── mp_recall_pin: "..."              ← 置顶记忆文本
-└── mp_recall_ctx: "..."              ← 召回上下文文本
-
-chatMetadata.extensions (极轻量指针 ~100 bytes)
-└── MemoryPilot: { version, chatKey, storeMode }
-
-localStorage (浏览器运行缓存)
-└── mp_memories_<chatKey>: "[...]"    ← 快速读取缓存
-```
-
-### 对比
-
-| | 旧 taskjs 版 | 本插件版 |
-|---|---|---|
-| STscript /setvar | 每条消息 4-6 次 | **0 次** |
-| LWB_SNAP 快照 | mp_memories 被重复快照 (99.7%) | 不暴露，不被快照 |
-| chatMetadata 体积 | 数 MB ~ 数百 MB | ~100 bytes |
-| 每条消息 saveChat | 4-6 次 | **0 次** |
-| 跨端同步 | ✅ 但文件太大导致 502 | ✅ extensionSettings 独立同步 |
-| Prompt 自定义 | 绑定单个聊天 | 全局共享，跨聊天跨设备 |
-
-### 数据读取 fallback
-
-```
-localStorage → extensionSettings → chatMetadata（旧版兼容） → 默认值
-```
-
----
-
-## 使用
-
-### 按钮
-
-三个按钮位于聊天输入栏上方（与原 taskjs 位置相同）：
-- **🧭 MP 管理面板**
-- **🧭 MP API配置**
-- **🧭 MP 召回监控**
-
-版本切换在扩展面板 → MemoryPilot → 下拉选择。
-
-### Prompt 注入
-
-在角色卡或系统 prompt 中使用：
-```
-{{getvar::mp_recall_pin}}
-{{getvar::mp_recall_ctx}}
-```
-
-### 记忆数据结构
+### 👥 NPC 角色分级 + 别名
 
 ```json
-{
-  "id": "uuid",
-  "event": "事件名",
-  "summary": "详细摘要",
-  "priority": "high | medium | low",
-  "primaryKeywords": ["主词1", "主词2"],
-  "secondaryKeywords": ["辅助词1"],
-  "entityKeywords": ["实体1"],
-  "floorRange": [100, 120],
-  "timeLabel": "下午",
-  "source": "xb_event | manual"
-}
+"entityRole": {"阿尔忒弥斯": "major", "老布": "minor", "酒馆老板": "npc"}
+"entityAliases": {"阿尔忒弥斯": ["月神", "Artemis", "队长"]}
+```
+
+- **minor NPC** 名字被匹配时，记忆获得 +0.05 评分加成（稀有 = 高价值信号）
+- **major 角色** 名不加权（到处出现，信号量为零）
+- 别名自动展开：对话提到"月神" → 引擎知道是阿尔忒弥斯 → 触发关联记忆
+
+### 🔄 召回频率奖励（v4 新增）
+
+反复被召回的记忆获得 α 衰减抵消，"越用越强"：
+
+```
+frequencyReward = min(0.3, log2(1 + recallCount) × 0.08)
+effectiveAlpha = distanceAlpha - frequencyReward
+```
+
+召回 3 次 → α 减 0.16 | 召回 7 次 → α 减 0.24 | 上限 0.30
+
+### 📅 时间线
+
+故事大纲，按天排列，三级标记：`★ 转折` / `● 关键` / `· 普通`
+
+### 🧠 AI 智能召回（可选）
+
+Embedding 语义检索 → AI 代理写回忆叙事。需要 `/v1/embeddings` API。纯可选，不影响核心功能。
+
+---
+
+## Prompt 注入配置
+
+```
+## 故事记忆锚点
+{{getvar::mp_layered_ctx}}
+以上包含时间线、待办事项、相关人物/场景/事件锚点。回复时保持一致。
+
+## 持续生效的核心记忆
+{{getvar::mp_recall_pin}}
+这些内容属于长期稳定记忆，回复时应始终保持一致。
+
+## 当前话题触发的相关记忆
+{{getvar::mp_recall_ctx}}
+这些内容只在与当前话题相关时自然参考，不要逐条复述。
+
+## 回忆叙事（可选）
+{{getvar::mp_recall_narrative}}
+以上为根据当前话题联想到的相关回忆，自然融入回复。
 ```
 
 ---
 
-## 许可
+## 从 v3.5.0 升级
+
+- ✅ 完全向后兼容，零迁移
+- ✅ 新字段（`entityRole`, `entityAliases`, `_recallCount`）安全默认
+- ✅ 新存储键（`layeredMemory`, `timeline`, `todos`, `embeddingVectors`）增量添加
+- ✅ 已自定义分析 Prompt 的用户：旧 prompt 继续工作，不产出 B 类数据
+- ✅ 使用默认 Prompt 的用户：自动获得锚点+时间线+待办提取
+
+### 与 LWB 的关系
+
+v4.0 的记忆系统**完全自给自足**。自动总结独立产出所有数据，不依赖 LWB 的 XB 事件。
+
+XB 事件 Tab 保留作为**可选桥接**——你可以从 LWB 的 storySummary 导入事件到 MP 记忆列表。但这不是必需的。
+
+---
+
+## 文件结构
+
+```
+index.js                    入口 + 自动总结（含 B 类解析）
+src/
+  layered-memory.js         分层记忆 + 时间线 + 待办 + Embedding + AI召回
+  anchor-panel.js           ⚓ 分层记忆面板（锚点/时间线/待办/AI召回）
+  recall-v34.js             召回引擎（NPC加权 + 频率奖励 + 别名展开）
+  recall-v32.js             召回引擎 v32（经典，未修改）
+  panel.js                  管理面板（记忆列表/XB/分析/过滤）
+  api-config.js             API 配置（未修改）
+  monitor.js                召回监控（未修改）
+  storage.js                存储层（未修改）
+```
+
+---
+
+## 致谢
+
+- [MMPEA](https://github.com/chenc4892-code/memory-manager) — Embedding 检索 + AI 记忆代理 + 时间线
+- [Horae](https://github.com/SenriYuki/SillyTavern-Horae) — 结构化保持 + 时间锚点 + 场景记忆 + 待办事项
+- [LittleWhiteBox](https://github.com/RT15548/LittleWhiteBox) — 多层存储 + 因果链 + Dense-Lexical 融合
+
+## 许可证
 
 MIT License

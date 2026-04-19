@@ -7,6 +7,11 @@
   padding: 4px 8px;
   justify-content: flex-start;
   flex-wrap: wrap;
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  max-height: 40px;
+  overflow: hidden;
 }
 
 .mp-chat-btn {
@@ -28,6 +33,18 @@
 
 .mp-chat-btn:active {
   background: rgba(128, 128, 128, 0.45);
+}
+
+/* v3.6.0: Anchor panel button */
+.mp-chat-btn-anchor {
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.25);
+  color: #34d399;
+}
+
+.mp-chat-btn-anchor:hover {
+  background: rgba(52, 211, 153, 0.25);
+  border-color: rgba(52, 211, 153, 0.4);
 }
 
 /* Settings panel in extensions drawer */
