@@ -1,0 +1,27 @@
+{
+    "version": 1,
+    "type": "full",
+    "data": {
+        "prompts": [
+            {
+                "identifier": "2558c73d-c6ba-4f51-b6b3-d6720c0ce85c",
+                "system_prompt": false,
+                "enabled": false,
+                "marker": false,
+                "name": "记忆召回系统",
+                "role": "system",
+                "content": "## 持续生效的核心记忆\n{{getvar::mp_recall_pin}}\n\n这些内容属于长期稳定记忆，回复时应始终保持一致。\n\n## 当前话题触发的相关记忆\n{{getvar::mp_recall_ctx}}\n\n这些内容只在与当前话题相关时自然参考，不要逐条复述，不要直接照抄原句。",
+                "injection_position": 1,
+                "injection_depth": 4,
+                "injection_order": 100,
+                "forbid_overrides": false
+            }
+        ],
+        "prompt_order": [
+            {
+                "identifier": "2558c73d-c6ba-4f51-b6b3-d6720c0ce85c",
+                "enabled": false
+            }
+        ]
+    }
+}
