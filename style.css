@@ -1,55 +1,5 @@
 /* MemoryPilot Extension */
 
-/* ====== Wand Menu (Extensions Menu / 魔法棒) Section ====== */
-.mp-wand-section {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 6px 0;
-  margin-top: 4px;
-}
-
-.mp-wand-header {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--SmartThemeBodyColor, #ccc);
-  opacity: 0.6;
-  padding: 2px 12px 4px;
-  letter-spacing: 0.5px;
-}
-
-.mp-wand-items {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.mp-wand-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  cursor: pointer;
-  color: var(--SmartThemeBodyColor, #ccc);
-  font-size: 13px;
-  transition: background 0.15s;
-  border-radius: 4px;
-  margin: 0 4px;
-}
-
-.mp-wand-item:hover {
-  background: rgba(128, 128, 128, 0.2);
-}
-
-.mp-wand-item:active {
-  background: rgba(128, 128, 128, 0.35);
-}
-
-.mp-wand-item i {
-  width: 16px;
-  text-align: center;
-  font-size: 13px;
-  opacity: 0.8;
-}
-
 /* ====== Chat bar buttons - same position as original taskjs buttons ====== */
 .mp-chat-bar {
   display: flex;

@@ -98,31 +98,39 @@ function addWandMenuButtons() {
     if (wandContainer) break;
   }
 
-  // Create the MP section for the wand menu
-  const wandSection = document.createElement('div');
-  wandSection.id = 'mp_wand_buttons';
-  wandSection.className = 'mp-wand-section';
-  wandSection.innerHTML = `
-    <div class="mp-wand-header">🧭 MemoryPilot</div>
-    <div class="mp-wand-items">
-      <div id="mp_wand_panel" class="mp-wand-item menu_button" title="MP 管理面板">
-        <i class="fa-solid fa-compass"></i>
-        <span>管理面板</span>
-      </div>
-      <div id="mp_wand_api" class="mp-wand-item menu_button" title="MP API配置">
-        <i class="fa-solid fa-gear"></i>
-        <span>API配置</span>
-      </div>
-      <div id="mp_wand_monitor" class="mp-wand-item menu_button" title="MP 召回监控">
-        <i class="fa-solid fa-chart-line"></i>
-        <span>召回监控</span>
-      </div>
-    </div>
-  `;
+  // Build individual menu items that match ST native wand menu style
+  // Each item mimics the same structure as "Open Data Bank", "Token Counter", etc.
+  const items = [
+    { id: 'mp_wand_panel',   icon: 'fa-solid fa-compass',    label: 'MP 面板',   handler: () => openPanel() },
+    { id: 'mp_wand_api',     icon: 'fa-solid fa-gear',       label: 'MP API',    handler: () => openApiConfig() },
+    { id: 'mp_wand_monitor', icon: 'fa-solid fa-chart-line', label: 'MP 监控',   handler: () => openMonitor() },
+  ];
+
+  // Create a minimal marker so we don't double-insert
+  const marker = document.createElement('span');
+  marker.id = 'mp_wand_buttons';
+  marker.style.display = 'none';
+
+  const fragment = document.createDocumentFragment();
+  fragment.appendChild(marker);
+
+  for (const item of items) {
+    const el = document.createElement('div');
+    el.id = item.id;
+    el.className = 'list-group-item flex-container flexGap5';
+    el.title = item.label;
+    el.innerHTML = `<i class="${item.icon}"></i> ${item.label}`;
+    el.addEventListener('click', item.handler);
+    fragment.appendChild(el);
+  }
+
+  function insertInto(container) {
+    container.appendChild(fragment);
+    console.log('[MP] Wand menu buttons added');
+  }
 
   if (wandContainer) {
-    wandContainer.appendChild(wandSection);
-    console.log('[MP] Wand menu buttons added to extensions menu');
+    insertInto(wandContainer);
   } else {
     // If wand container not found yet, observe DOM and retry
     console.log('[MP] Wand menu container not found, will retry via MutationObserver');
@@ -130,22 +138,15 @@ function addWandMenuButtons() {
       for (const sel of wandSelectors) {
         const el = document.querySelector(sel);
         if (el && !document.getElementById('mp_wand_buttons')) {
-          el.appendChild(wandSection);
-          console.log('[MP] Wand menu buttons added (deferred)');
+          insertInto(el);
           observer.disconnect();
           return;
         }
       }
     });
     obs.observe(document.body, { childList: true, subtree: true });
-    // Timeout fallback: stop observing after 30s
     setTimeout(() => obs.disconnect(), 30000);
   }
-
-  // Bind click events (use event delegation since element may be deferred)
-  wandSection.querySelector('#mp_wand_panel').addEventListener('click', () => openPanel());
-  wandSection.querySelector('#mp_wand_api').addEventListener('click', () => openApiConfig());
-  wandSection.querySelector('#mp_wand_monitor').addEventListener('click', () => openMonitor());
 }
 
 // ====== Chat Input Bar Buttons (above send form, as before) ======
