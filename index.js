@@ -79,7 +79,77 @@ window.MemoryPilot = {
   cleanupLegacyArtifacts,
 };
 
-// ====== Chat Input Bar Buttons (same position as original taskjs) ======
+// ====== Wand Menu (Extensions Menu / 魔法棒) Buttons ======
+
+function addWandMenuButtons() {
+  if (document.getElementById('mp_wand_buttons')) return;
+
+  // Find the wand menu popup container
+  // SillyTavern uses #extensionsMenu as the wand popup, or the dropdown launched by the wand icon
+  const wandSelectors = [
+    '#extensionsMenu',             // Main extensions menu popup (wand popup content)
+    '#extensionsMenuPopup',        // Alternative popup container name
+    '.extensions_block',           // Extensions block in wand area
+  ];
+
+  let wandContainer = null;
+  for (const sel of wandSelectors) {
+    wandContainer = document.querySelector(sel);
+    if (wandContainer) break;
+  }
+
+  // Build individual menu items that match ST native wand menu style
+  // Each item mimics the same structure as "Open Data Bank", "Token Counter", etc.
+  const items = [
+    { id: 'mp_wand_panel',   icon: 'fa-solid fa-compass',    label: 'MP 面板',   handler: () => openPanel() },
+    { id: 'mp_wand_api',     icon: 'fa-solid fa-gear',       label: 'MP API',    handler: () => openApiConfig() },
+    { id: 'mp_wand_monitor', icon: 'fa-solid fa-chart-line', label: 'MP 监控',   handler: () => openMonitor() },
+  ];
+
+  // Create a minimal marker so we don't double-insert
+  const marker = document.createElement('span');
+  marker.id = 'mp_wand_buttons';
+  marker.style.display = 'none';
+
+  const fragment = document.createDocumentFragment();
+  fragment.appendChild(marker);
+
+  for (const item of items) {
+    const el = document.createElement('div');
+    el.id = item.id;
+    el.className = 'list-group-item flex-container flexGap5';
+    el.title = item.label;
+    el.innerHTML = `<i class="${item.icon}"></i> ${item.label}`;
+    el.addEventListener('click', item.handler);
+    fragment.appendChild(el);
+  }
+
+  function insertInto(container) {
+    container.appendChild(fragment);
+    console.log('[MP] Wand menu buttons added');
+  }
+
+  if (wandContainer) {
+    insertInto(wandContainer);
+  } else {
+    // If wand container not found yet, observe DOM and retry
+    console.log('[MP] Wand menu container not found, will retry via MutationObserver');
+    const obs = new MutationObserver((mutations, observer) => {
+      for (const sel of wandSelectors) {
+        const el = document.querySelector(sel);
+        if (el && !document.getElementById('mp_wand_buttons')) {
+          insertInto(el);
+          observer.disconnect();
+          return;
+        }
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => obs.disconnect(), 30000);
+  }
+}
+
+// ====== Chat Input Bar Buttons (above send form, as before) ======
 
 function addChatBarButtons() {
   if (document.getElementById('mp_chat_buttons')) return;
@@ -215,12 +285,18 @@ jQuery(async () => {
   $('#extensions_settings2').append(html);
   bindSettingsEvents();
 
-  // Buttons above chat input (like original taskjs)
+  // Buttons in wand menu (extensions menu / 魔法棒) — always accessible
+  addWandMenuButtons();
+
+  // Buttons above chat input (like original taskjs) — also kept for convenience
   addChatBarButtons();
 
   // Re-add buttons if chat area is rebuilt
   ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, () => {
-    setTimeout(() => addChatBarButtons(), 500);
+    setTimeout(() => {
+      addWandMenuButtons();
+      addChatBarButtons();
+    }, 500);
   });
 
   hookRecall();

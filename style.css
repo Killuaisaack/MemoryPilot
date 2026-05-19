@@ -1,6 +1,6 @@
 /* MemoryPilot Extension */
 
-/* Chat bar buttons - same position as original taskjs buttons */
+/* ====== Chat bar buttons - same position as original taskjs buttons ====== */
 .mp-chat-bar {
   display: flex;
   gap: 4px;
