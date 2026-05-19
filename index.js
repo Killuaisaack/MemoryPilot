@@ -79,7 +79,76 @@ window.MemoryPilot = {
   cleanupLegacyArtifacts,
 };
 
-// ====== Chat Input Bar Buttons (same position as original taskjs) ======
+// ====== Wand Menu (Extensions Menu / 魔法棒) Buttons ======
+
+function addWandMenuButtons() {
+  if (document.getElementById('mp_wand_buttons')) return;
+
+  // Find the wand menu popup container
+  // SillyTavern uses #extensionsMenu as the wand popup, or the dropdown launched by the wand icon
+  const wandSelectors = [
+    '#extensionsMenu',             // Main extensions menu popup (wand popup content)
+    '#extensionsMenuPopup',        // Alternative popup container name
+    '.extensions_block',           // Extensions block in wand area
+  ];
+
+  let wandContainer = null;
+  for (const sel of wandSelectors) {
+    wandContainer = document.querySelector(sel);
+    if (wandContainer) break;
+  }
+
+  // Create the MP section for the wand menu
+  const wandSection = document.createElement('div');
+  wandSection.id = 'mp_wand_buttons';
+  wandSection.className = 'mp-wand-section';
+  wandSection.innerHTML = `
+    <div class="mp-wand-header">🧭 MemoryPilot</div>
+    <div class="mp-wand-items">
+      <div id="mp_wand_panel" class="mp-wand-item menu_button" title="MP 管理面板">
+        <i class="fa-solid fa-compass"></i>
+        <span>管理面板</span>
+      </div>
+      <div id="mp_wand_api" class="mp-wand-item menu_button" title="MP API配置">
+        <i class="fa-solid fa-gear"></i>
+        <span>API配置</span>
+      </div>
+      <div id="mp_wand_monitor" class="mp-wand-item menu_button" title="MP 召回监控">
+        <i class="fa-solid fa-chart-line"></i>
+        <span>召回监控</span>
+      </div>
+    </div>
+  `;
+
+  if (wandContainer) {
+    wandContainer.appendChild(wandSection);
+    console.log('[MP] Wand menu buttons added to extensions menu');
+  } else {
+    // If wand container not found yet, observe DOM and retry
+    console.log('[MP] Wand menu container not found, will retry via MutationObserver');
+    const obs = new MutationObserver((mutations, observer) => {
+      for (const sel of wandSelectors) {
+        const el = document.querySelector(sel);
+        if (el && !document.getElementById('mp_wand_buttons')) {
+          el.appendChild(wandSection);
+          console.log('[MP] Wand menu buttons added (deferred)');
+          observer.disconnect();
+          return;
+        }
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    // Timeout fallback: stop observing after 30s
+    setTimeout(() => obs.disconnect(), 30000);
+  }
+
+  // Bind click events (use event delegation since element may be deferred)
+  wandSection.querySelector('#mp_wand_panel').addEventListener('click', () => openPanel());
+  wandSection.querySelector('#mp_wand_api').addEventListener('click', () => openApiConfig());
+  wandSection.querySelector('#mp_wand_monitor').addEventListener('click', () => openMonitor());
+}
+
+// ====== Chat Input Bar Buttons (above send form, as before) ======
 
 function addChatBarButtons() {
   if (document.getElementById('mp_chat_buttons')) return;
@@ -215,12 +284,18 @@ jQuery(async () => {
   $('#extensions_settings2').append(html);
   bindSettingsEvents();
 
-  // Buttons above chat input (like original taskjs)
+  // Buttons in wand menu (extensions menu / 魔法棒) — always accessible
+  addWandMenuButtons();
+
+  // Buttons above chat input (like original taskjs) — also kept for convenience
   addChatBarButtons();
 
   // Re-add buttons if chat area is rebuilt
   ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, () => {
-    setTimeout(() => addChatBarButtons(), 500);
+    setTimeout(() => {
+      addWandMenuButtons();
+      addChatBarButtons();
+    }, 500);
   });
 
   hookRecall();
