@@ -1308,6 +1308,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     #${P} .guidebox ol{margin:0;padding-left:18px;color:#ddd;font-size:12px;line-height:1.6}
     #${P} .guidebox li{margin-bottom:8px}
     #${P} .guidebox .gbar{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px}
+    #${P} .me.jump{cursor:pointer;color:#c4b5fd}
+    #${P} .me.jump:hover{text-decoration:underline;color:#fff}
+    #${P} .guidebox .stepgo{margin-left:6px;padding:2px 7px;font-size:10px}
     @media(max-width:760px){
       #${P}{padding:max(6px, env(safe-area-inset-top)) 6px max(6px, env(safe-area-inset-bottom)) 6px}
       #${P} .card{max-width:100%;max-height:calc(100dvh - max(12px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));border-radius:10px}
@@ -1382,8 +1385,6 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
             <button class="ftab" data-mf="low" id="mp_f_low">低</button>
             <button class="ftab" data-mf="xb_norecon" id="mp_f_xbnr">未重构XB</button>
             <input id="mp_f_search" placeholder="搜索事件名/摘要…" style="flex:1;min-width:80px;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.3);color:#eee;font-size:11px">
-            <button class="btn" id="mp_search_prev">上一个</button>
-            <button class="btn" id="mp_search_next">下一个</button>
           </div>
           <div id="mp_list"></div>
         </div>
@@ -1495,14 +1496,14 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         <div class="guidebox">
           <h4>Memory Pilot 新手指引</h4>
           <ol>
-            <li>在 XB 事件页导入需要的事件，可以导入为置顶、普通或低优先级。</li>
-            <li>导入后建议重构关键词：可在记忆列表勾选 XB 事件后批量重构，也可以进入编辑页手动调整。</li>
-            <li>合并事件时可以在“关键词”下拉里选择“AI重构”，适合把多个零散事件整理成一条更干净的记忆。</li>
-            <li>已有记忆随时可以在列表里编辑；搜索后可用“上一个/下一个”跳转定位。</li>
-            <li>需要把事件记忆 prompt 单项加入 system prompt，之后可在 chat_history 或召回监控中确认是否触发。</li>
-            <li>副 API 设置用于关键词重构、合并和分析；OAI 兼容格式可用。</li>
-            <li>“分析”页用于补充自动总结没有覆盖好的事件；不是必需流程。</li>
-            <li>过滤页包含召回设置、关键词黑名单、清洗规则、导入导出，以及本指引入口。</li>
+            <li>先到 XB 事件页导入需要的事件，可以导入为置顶、普通或低优先级。<button class="btn stepgo" data-guide-tab="xb">去 XB 事件</button></li>
+            <li>XB 事件导入后必须重构关键词。可以在记忆列表勾选 XB 事件后批量重构，也可以进入编辑页手动调整。<button class="btn stepgo" data-guide-tab="list">去记忆列表</button></li>
+            <li>合并事件时可以在“关键词”下拉里选择“AI重构关键词”，适合把多个零散事件整理成一条更干净的记忆。<button class="btn stepgo" data-guide-tab="list">去合并入口</button></li>
+            <li>已有记忆可以再编辑；搜索后点击事件标题，会回到完整列表并跳转到该条记忆的位置。<button class="btn stepgo" data-guide-tab="add">去编辑页</button></li>
+            <li>需要把事件记忆 prompt 单项加入 system prompt，之后可在 chat_history 或召回监控中确认是否触发。<button class="btn stepgo" data-guide-action="monitor">打开召回监控</button></li>
+            <li>副 API 设置用于关键词重构、合并和分析；OAI 兼容格式可用。<button class="btn stepgo" data-guide-action="api">打开 API 设置</button></li>
+            <li>“分析”页用于补充自动总结没有覆盖好的事件；不是必需流程。<button class="btn stepgo" data-guide-tab="batch">去分析页</button></li>
+            <li>过滤页包含召回设置、关键词黑名单、清洗规则、导入导出，以及本指引入口。<button class="btn stepgo" data-guide-tab="cfg">去过滤页</button></li>
           </ol>
           <div class="gbar">
             <button class="btn" id="mp_guide_later">稍后再看</button>
@@ -1576,6 +1577,13 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       toastr?.success?.('已撤回删除');
     };
   };
+  const activateTab = (tab) => {
+    root.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
+    root.querySelectorAll('.pg').forEach(x=>x.classList.remove('on'));
+    root.querySelector(`.tab[data-t="${tab}"]`)?.classList.add('on');
+    $('mp_pg_'+tab)?.classList.add('on');
+    if(tab==='add'&&!editId){$('mp_fe').value='';$('mp_fpk').value='';$('mp_fsk').value='';$('mp_fek').value='';$('mp_ft').value='';$('mp_ftv').value='';$('mp_ffr').value='';$('mp_fs').value='';$('mp_fp').value='medium';}
+  };
   const renderList=()=>{
     memories = dedupeMemories(loadMem());
     $('mp_n1').textContent=memories.length;
@@ -1600,7 +1608,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       const canRebuild = m.source === 'xb_event';
       const pick = `<label class="ht" style="display:flex;align-items:center;gap:6px"><input type="checkbox" class="mp_pick" data-id="${h(m.id)}" ${selectedIds.has(m.id)?'checked':''}>选择</label>`;
       const rebuildBtn = canRebuild ? `<button class="btn bp1" onclick="window._mpKR('${m.id}')">${kwRunning && kwRunningId===m.id ? '中止重构' : '优化关键词'}</button>` : '';
-      return `<div class="mi" data-mid="${h(m.id)}"><div class="mh"><span class="me">${pin}${h(m.event)}</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${pick}<span class="bp ${pc}">${pl}</span></div></div>${time}<div class="ms">${h(m.summary)}</div><div class="kr">${src}${pkw}${skw}${ent}</div><div class="ma">${rebuildBtn}<button class="btn" onclick="window._mpE('${m.id}')">编辑</button><button class="btn bd1" onclick="window._mpD('${m.id}')">删除</button></div></div>`;
+      return `<div class="mi" data-mid="${h(m.id)}"><div class="mh"><span class="me jump" title="跳转到完整列表中的位置" onclick="window._mpJump('${m.id}')">${pin}${h(m.event)}</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${pick}<span class="bp ${pc}">${pl}</span></div></div>${time}<div class="ms">${h(m.summary)}</div><div class="kr">${src}${pkw}${skw}${ent}</div><div class="ma">${rebuildBtn}<button class="btn" onclick="window._mpE('${m.id}')">编辑</button><button class="btn bd1" onclick="window._mpD('${m.id}')">删除</button></div></div>`;
     }).join('');
     $('mp_sel_info').textContent = `已选 ${selectedIds.size} 条记忆`;
     c.querySelectorAll('.mp_pick').forEach(el=>{
@@ -1817,8 +1825,17 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     };
   });
   $('mp_f_search').oninput = () => { _listSearch = $('mp_f_search').value.trim(); searchCursor = -1; renderList(); };
-  $('mp_search_prev').onclick = () => jumpSearch(-1);
-  $('mp_search_next').onclick = () => jumpSearch(1);
+  window._mpJump = (id) => {
+    _listSearch = '';
+    _listFilter = 'all';
+    searchCursor = -1;
+    if ($('mp_f_search')) $('mp_f_search').value = '';
+    root.querySelectorAll('.ftab').forEach(b => b.classList.remove('on'));
+    root.querySelector('[data-mf="all"]')?.classList.add('on');
+    activateTab('list');
+    renderList();
+    requestAnimationFrame(() => scrollToListItem(id));
+  };
   $('mp_float_top').onclick = () => root.querySelector('.bd')?.scrollTo({ top: 0, behavior: 'smooth' });
   $('mp_float_bottom').onclick = () => {
     const bd = root.querySelector('.bd');
@@ -1851,16 +1868,30 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   $('mp_guide_ok').onclick = () => { markGuideSeen(); hideGuide(); };
   $('mp_guide_later').onclick = () => { markGuideSeen(); hideGuide(); };
   $('mp_guide_mask').onclick = () => { markGuideSeen(); hideGuide(); };
+  root.querySelectorAll('[data-guide-tab]').forEach(btn => {
+    btn.onclick = () => {
+      markGuideSeen();
+      hideGuide();
+      activateTab(btn.getAttribute('data-guide-tab'));
+      root.querySelector('.bd')?.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+  });
+  root.querySelectorAll('[data-guide-action]').forEach(btn => {
+    btn.onclick = () => {
+      markGuideSeen();
+      hideGuide();
+      const action = btn.getAttribute('data-guide-action');
+      if (action === 'api') window.MemoryPilot?.openApiConfig?.();
+      if (action === 'monitor') window.MemoryPilot?.openMonitor?.();
+    };
+  });
   try {
     const seen = localStorage.getItem('mp_onboarding_seen_v1') === '1' || _getGlobalStore().onboardingSeenV1 === true;
     if (!seen) setTimeout(() => showGuide(true), 150);
   } catch {}
 
   root.querySelectorAll('.tab').forEach(t=>{t.onclick=()=>{
-    root.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
-    root.querySelectorAll('.pg').forEach(x=>x.classList.remove('on'));
-    t.classList.add('on');$('mp_pg_'+t.dataset.t)?.classList.add('on');
-    if(t.dataset.t==='add'&&!editId){$('mp_fe').value='';$('mp_fpk').value='';$('mp_fsk').value='';$('mp_fek').value='';$('mp_ft').value='';$('mp_ftv').value='';$('mp_ffr').value='';$('mp_fs').value='';$('mp_fp').value='medium';}
+    activateTab(t.dataset.t);
   };});
 
   $('mp_sv').onclick=async()=>{
