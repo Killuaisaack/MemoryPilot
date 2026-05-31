@@ -8,7 +8,17 @@ import { runRecall as runRecallV32 } from './src/recall-v32.js';
 import { openPanel } from './src/panel.js';
 import { openApiConfig } from './src/api-config.js';
 import { openMonitor } from './src/monitor.js';
-import { migrateIfNeeded, detectLegacyArtifacts, cleanupLegacyArtifacts, onChatChanged } from './src/storage.js';
+import {
+  migrateIfNeeded,
+  detectLegacyArtifacts,
+  cleanupLegacyArtifacts,
+  onChatChanged,
+  loadMemories,
+  saveMemories,
+  getMemoryRecoverySnapshots,
+  restoreMemoriesFromSnapshot,
+  flushStorageNow,
+} from './src/storage.js';
 
 const MODULE_NAME = 'MemoryPilot';
 
@@ -77,6 +87,11 @@ window.MemoryPilot = {
   openMonitor,
   detectLegacyArtifacts,
   cleanupLegacyArtifacts,
+  loadMemories,
+  saveMemories,
+  getMemoryRecoverySnapshots,
+  restoreMemoriesFromSnapshot,
+  flushStorageNow,
 };
 
 // ====== Wand Menu (Extensions Menu / 魔法棒) Buttons ======
@@ -251,9 +266,10 @@ function hookRecall() {
       } catch {}
       try {
         await migrateIfNeeded();
+        // 静默检测，不再弹 toastr —— migrateIfNeeded 内部已做幂等，不会重复处理
         const report = detectLegacyArtifacts();
         if (report.hasLegacyMpMetadata || report.hasLegacyMpVars || report.lwbSnapHasMpTraces) {
-          toastr?.info?.('检测到当前聊天存在旧版 MP / LWB 快照痕迹，可在 MP 面板 → 过滤 中清理。');
+          console.log('[MP] 检测到旧版痕迹（不弹通知），可在 MP 面板 → 过滤 中手动清理。', report.summary);
         }
       } catch (e) { console.warn('[MP] detect legacy err', e); }
     });
@@ -274,9 +290,10 @@ jQuery(async () => {
 
   try {
     await migrateIfNeeded();
+    // 静默检测，不再弹 toastr —— migrateIfNeeded 内部已做幂等
     const report = detectLegacyArtifacts();
     if (report.hasLegacyMpMetadata || report.hasLegacyMpVars || report.lwbSnapHasMpTraces) {
-      toastr?.info?.('检测到当前聊天存在旧版 MP / LWB 快照痕迹，可在 MP 面板 → 过滤 中清理。');
+      console.log('[MP] 检测到旧版痕迹（不弹通知），可在 MP 面板 → 过滤 中手动清理。', report.summary);
     }
   } catch (e) { console.warn('[MP] startup migration err', e); }
 

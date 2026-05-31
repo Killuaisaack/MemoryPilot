@@ -134,6 +134,10 @@ export async function openMonitor() {
   };
   const saveText = async (key, value) => {
     const text = String(value ?? '');
+    // 变更检测：值未变则跳过所有写入
+    try {
+      if (ctx.chatMetadata?.variables?.[key] === text) return;
+    } catch {}
     try { localStorage.setItem(key, text); } catch {}
     // Write directly to chatMetadata.variables for {{getvar::}} macro access
     try {
