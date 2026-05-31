@@ -179,13 +179,18 @@ function formatBytes(n) {
   return `${(num / 1024 / 1024).toFixed(2)} MB`;
 }
 
+function resolveSillyTavernContext() {
+  const st = globalThis.SillyTavern || globalThis.window?.SillyTavern;
+  return st?.getContext?.() || null;
+}
+
 function getCtx() {
-  if (!_ctx) _ctx = SillyTavern?.getContext?.() || window.SillyTavern?.getContext?.();
+  if (!_ctx) _ctx = resolveSillyTavernContext();
   return _ctx;
 }
 
 function refreshCtx() {
-  _ctx = SillyTavern?.getContext?.() || window.SillyTavern?.getContext?.();
+  _ctx = resolveSillyTavernContext();
   return _ctx;
 }
 
@@ -232,27 +237,20 @@ function getChatStore() {
 
 function saveSettingsDebounced() {
   const ctx = getCtx();
-  if (typeof ctx?.saveSettingsDebounced === 'function') {
-    clearTimeout(_settingsSaveTimer);
-    _settingsSaveTimer = setTimeout(() => {
-      try { ctx.saveSettingsDebounced(); } catch (e) { console.warn('[MP] settings save err', e); }
-    }, _SETTINGS_DEBOUNCE);
-  }
+  if (typeof ctx?.saveSettingsDebounced !== 'function') return;
+  clearTimeout(_settingsSaveTimer);
+  _settingsSaveTimer = setTimeout(() => {
+    try { ctx.saveSettingsDebounced(); } catch (e) { console.warn('[MP] settings save err', e); }
+  }, _SETTINGS_DEBOUNCE);
 }
 
-// 立即刷入（供 beforeunload 使用）
-function flushSettingsNow() {
 function flushSettingsNow() {
   clearTimeout(_settingsSaveTimer);
   const ctx = getCtx();
   try {
-    if (typeof ctx?.saveSettings === 'function') {
-      ctx.saveSettings();
-    } else if (typeof ctx?.saveSettingsDebounced?.flush === 'function') {
-      ctx.saveSettingsDebounced.flush();
-    } else if (typeof ctx?.saveSettingsDebounced === 'function') {
-      ctx.saveSettingsDebounced();
-    }
+    if (typeof ctx?.saveSettings === 'function') ctx.saveSettings();
+    else if (typeof ctx?.saveSettingsDebounced?.flush === 'function') ctx.saveSettingsDebounced.flush();
+    else if (typeof ctx?.saveSettingsDebounced === 'function') ctx.saveSettingsDebounced();
   } catch {}
 }
 
@@ -364,8 +362,6 @@ export function readVar(key) {
 // ====== Memory CRUD ======
 
 // 缓存最后写入的 memories 签名，用于变更检测
-let _lastMemoriesSignature = null;
-
 let _lastMemoriesSignature = null;
 
 function stringifyMemories(mems) {
