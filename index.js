@@ -15,6 +15,8 @@ import {
   onChatChanged,
   loadMemories,
   saveMemories,
+  getStorageLogs,
+  clearStorageLogs,
   getMemoryRecoverySnapshots,
   restoreMemoriesFromSnapshot,
   flushStorageNow,
@@ -89,6 +91,8 @@ window.MemoryPilot = {
   cleanupLegacyArtifacts,
   loadMemories,
   saveMemories,
+  getStorageLogs,
+  clearStorageLogs,
   getMemoryRecoverySnapshots,
   restoreMemoriesFromSnapshot,
   flushStorageNow,
@@ -229,6 +233,17 @@ function buildSettingsHtml() {
             <div class="mp-info" style="font-size:11px;opacity:0.6;line-height:1.5">
               存储: extensionSettings · 零 /setvar · 不被 LWB 快照
             </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button id="mp_show_logs" class="menu_button" style="flex:1">查看日志</button>
+              <button id="mp_copy_logs" class="menu_button" style="flex:1">复制日志</button>
+              <button id="mp_clear_logs" class="menu_button" style="flex:1">清空日志</button>
+            </div>
+            <textarea id="mp_storage_log_box" class="text_pole" readonly style="display:none;width:100%;min-height:150px;font-size:11px;white-space:pre;font-family:monospace"></textarea>
+            <div id="mp_storage_log_status" class="mp-info" style="font-size:11px;opacity:0.65"></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button id="mp_update_btn" class="menu_button" style="flex:1">检查更新</button>
+              <button id="mp_reload_btn" class="menu_button" style="flex:1">重载应用更新</button>
+            </div>
           </div>
         </div>
       </div>
@@ -236,11 +251,67 @@ function buildSettingsHtml() {
   `;
 }
 
+function formatStorageLogEntry(entry) {
+  const time = entry?.ts ? new Date(entry.ts).toLocaleString() : 'unknown-time';
+  const action = entry?.action || 'op';
+  const key = entry?.key || '';
+  const detail = entry?.detail ? ` ${entry.detail}` : '';
+  const chat = entry?.chat ? ` [${entry.chat}]` : '';
+  return `${time} ${action}:${key}${detail}${chat}`;
+}
+
+function renderStorageLogBox() {
+  const logs = getStorageLogs(150);
+  const text = logs.length
+    ? logs.map(formatStorageLogEntry).join('\n')
+    : '暂无 MemoryPilot 存储日志。';
+  $('#mp_storage_log_box').val(text).show();
+  $('#mp_storage_log_status').text(`已显示 ${logs.length} 条日志`);
+  return text;
+}
+
+async function copyStorageLogs() {
+  const text = renderStorageLogBox();
+  try {
+    await navigator.clipboard.writeText(text);
+    toastr?.success?.('MemoryPilot 日志已复制');
+  } catch {
+    $('#mp_storage_log_box').trigger('select');
+    document.execCommand?.('copy');
+    toastr?.success?.('MemoryPilot 日志已复制');
+  }
+}
+
+async function handleUpdateClick() {
+  try {
+    const manifest = await fetch(new URL('./manifest.json', import.meta.url), { cache: 'no-store' }).then(r => r.json());
+    const url = String(manifest?.homePage || '').trim();
+    if (url) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+  } catch {}
+  toastr?.info?.('manifest 已开启 auto_update。请在 SillyTavern/TauriTavern 的扩展管理器执行更新；若已经覆盖新版文件，可点“重载应用更新”。');
+}
+
 function bindSettingsEvents() {
   $('#mp_recall_version').on('change', function() {
     getSettings().recallVersion = $(this).val();
     saveSettings();
     toastr.success(`召回引擎切换为 ${$(this).val()}`);
+  });
+  $('#mp_show_logs').on('click', renderStorageLogBox);
+  $('#mp_copy_logs').on('click', copyStorageLogs);
+  $('#mp_clear_logs').on('click', function() {
+    if (!confirm('清空 MemoryPilot 存储日志？')) return;
+    clearStorageLogs();
+    $('#mp_storage_log_box').val('').hide();
+    $('#mp_storage_log_status').text('日志已清空');
+    toastr?.success?.('MemoryPilot 日志已清空');
+  });
+  $('#mp_update_btn').on('click', handleUpdateClick);
+  $('#mp_reload_btn').on('click', function() {
+    if (confirm('重载当前页面以应用已下载的 MemoryPilot 更新？')) location.reload();
   });
 }
 
