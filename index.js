@@ -335,7 +335,7 @@ async function handleUpdateClick() {
     const latest = String(remote?.version || 'unknown');
     const cmp = compareVersions(latest, current);
     if (cmp > 0) {
-      const msg = `发现新版本：当前 ${current}，最新 ${latest}。请在扩展管理器更新，或打开主页下载。`;
+      const msg = `发现新版本：当前 ${current}，仓库最新 ${latest}。请打开 SillyTavern / TauriTavern 扩展管理器更新 MemoryPilot。`;
       status.text(msg);
       toastr?.info?.(msg);
       if (homePage) window.open(homePage, '_blank', 'noopener,noreferrer');
@@ -347,7 +347,7 @@ async function handleUpdateClick() {
       toastr?.success?.(msg);
       return;
     }
-    const msg = `本地版本 ${current} 高于远程版本 ${latest}，可能是开发版。`;
+    const msg = `本地版本 ${current} 高于仓库版本 ${latest}。本地已经是更新版本；如需公开给用户，请确认仓库 manifest 已同步。`;
     status.text(msg);
     toastr?.info?.(msg);
   } catch (e) {
