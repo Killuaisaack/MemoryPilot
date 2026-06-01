@@ -1559,16 +1559,25 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     scrollToListItem(items[searchCursor]?.id);
     $('mp_sel_info').textContent = `搜索结果 ${searchCursor + 1}/${items.length} · 已选 ${selectedIds.size} 条记忆`;
   };
-  const showDeleteUndo = (items) => {
-    if (!items?.length) return;
-    lastDeleted = { items, ts: Date.now() };
+  const makeDeleteSnapshot = (predicate) => memories
+    .map((memory, index) => ({ memory, index }))
+    .filter(entry => predicate(entry.memory));
+  const showDeleteUndo = (entries) => {
+    if (!entries?.length) return;
+    lastDeleted = { entries, ts: Date.now() };
     const bar = $('mp_undo_bar');
     if (!bar) return;
     bar.style.display = 'block';
-    bar.innerHTML = `已删除 ${items.length} 条记忆 <button class="btn bp1" id="mp_undo_delete" style="margin-left:8px">撤回</button>`;
+    bar.innerHTML = `已删除 ${entries.length} 条记忆 <button class="btn bp1" id="mp_undo_delete" style="margin-left:8px">撤回</button>`;
     $('mp_undo_delete').onclick = async () => {
-      if (!lastDeleted?.items?.length) return;
-      for (const m of lastDeleted.items) memories = upsertMemory(memories, m);
+      if (!lastDeleted?.entries?.length) return;
+      let restored = [...memories];
+      const entries = [...lastDeleted.entries].sort((a, b) => a.index - b.index);
+      for (const { memory, index } of entries) {
+        restored = restored.filter(m => m.id !== memory.id);
+        restored.splice(Math.max(0, Math.min(index, restored.length)), 0, memory);
+      }
+      memories = dedupeMemories(restored);
       await saveMem(memories);
       lastDeleted = null;
       bar.style.display = 'none';
@@ -1955,7 +1964,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   window._mpD=async id=>{
     if(!confirm('删除？'))return;
     await withLock('delete_'+id, async () => {
-      const removed = memories.filter(m=>m.id===id);
+      const removed = makeDeleteSnapshot(m=>m.id===id);
       memories=memories.filter(m=>m.id!==id);
       selectedIds.delete(id);
       await saveMem(memories);
@@ -2203,7 +2212,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     if (!confirm(`删除选中的 ${ids.length} 条记忆？`)) return;
     await withLock('delete_selected', async () => {
       const doomed = new Set(ids);
-      const removed = memories.filter(m => doomed.has(m.id));
+      const removed = makeDeleteSnapshot(m => doomed.has(m.id));
       memories = memories.filter(m => !doomed.has(m.id));
       selectedIds = new Set();
       await saveMem(memories);
