@@ -241,9 +241,10 @@ function buildSettingsHtml() {
             <textarea id="mp_storage_log_box" class="text_pole" readonly style="display:none;width:100%;min-height:150px;font-size:11px;white-space:pre;font-family:monospace"></textarea>
             <div id="mp_storage_log_status" class="mp-info" style="font-size:11px;opacity:0.65"></div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
-              <button id="mp_update_btn" class="menu_button" style="flex:1">检查更新</button>
+              <button id="mp_update_btn" class="menu_button" style="flex:1">检查是否最新</button>
               <button id="mp_reload_btn" class="menu_button" style="flex:1">重载应用更新</button>
             </div>
+            <div id="mp_update_status" class="mp-info" style="font-size:11px;opacity:0.75;line-height:1.5"></div>
           </div>
         </div>
       </div>
@@ -282,16 +283,78 @@ async function copyStorageLogs() {
   }
 }
 
-async function handleUpdateClick() {
+function compareVersions(a, b) {
+  const pa = String(a || '0').split(/[^\d]+/).filter(Boolean).map(Number);
+  const pb = String(b || '0').split(/[^\d]+/).filter(Boolean).map(Number);
+  const len = Math.max(pa.length, pb.length, 3);
+  for (let i = 0; i < len; i += 1) {
+    const da = pa[i] || 0;
+    const db = pb[i] || 0;
+    if (da > db) return 1;
+    if (da < db) return -1;
+  }
+  return 0;
+}
+
+function deriveRemoteManifestUrl(homePage) {
+  const raw = String(homePage || '').trim();
+  if (!raw) return '';
   try {
-    const manifest = await fetch(new URL('./manifest.json', import.meta.url), { cache: 'no-store' }).then(r => r.json());
-    const url = String(manifest?.homePage || '').trim();
-    if (url) {
-      window.open(url, '_blank', 'noopener,noreferrer');
+    const url = new URL(raw);
+    if (url.hostname === 'github.com') {
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (parts.length >= 2) {
+        const branch = parts[2] === 'tree' && parts[3] ? parts[3] : 'main';
+        return `https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/${branch}/manifest.json`;
+      }
+    }
+    return new URL('manifest.json', url.href.endsWith('/') ? url.href : `${url.href}/`).href;
+  } catch {
+    return '';
+  }
+}
+
+async function handleUpdateClick() {
+  const status = $('#mp_update_status');
+  status.text('正在检查 MemoryPilot 版本...');
+  try {
+    const local = await fetch(new URL('./manifest.json', import.meta.url), { cache: 'no-store' }).then(r => r.json());
+    const current = String(local?.version || 'unknown');
+    const homePage = String(local?.homePage || '').trim();
+    const remoteManifestUrl = deriveRemoteManifestUrl(homePage);
+    if (!remoteManifestUrl) {
+      const msg = `无法检查最新版本：当前版本 ${current}，但 manifest.homePage 未配置。请配置仓库主页后再检查。`;
+      status.text(msg);
+      toastr?.warning?.(msg);
       return;
     }
-  } catch {}
-  toastr?.info?.('manifest 已开启 auto_update。请在 SillyTavern/TauriTavern 的扩展管理器执行更新；若已经覆盖新版文件，可点“重载应用更新”。');
+    const remote = await fetch(remoteManifestUrl, { cache: 'no-store' }).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    });
+    const latest = String(remote?.version || 'unknown');
+    const cmp = compareVersions(latest, current);
+    if (cmp > 0) {
+      const msg = `发现新版本：当前 ${current}，最新 ${latest}。请在扩展管理器更新，或打开主页下载。`;
+      status.text(msg);
+      toastr?.info?.(msg);
+      if (homePage) window.open(homePage, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (cmp === 0) {
+      const msg = `已是最新版本：${current}`;
+      status.text(msg);
+      toastr?.success?.(msg);
+      return;
+    }
+    const msg = `本地版本 ${current} 高于远程版本 ${latest}，可能是开发版。`;
+    status.text(msg);
+    toastr?.info?.(msg);
+  } catch (e) {
+    const msg = `检查失败：${e?.message || e}`;
+    status.text(msg);
+    toastr?.error?.(msg);
+  }
 }
 
 function bindSettingsEvents() {
