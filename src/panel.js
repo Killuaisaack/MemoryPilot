@@ -1285,6 +1285,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   // ===== Style =====
   const st=document.createElement('style');st.id=S;
+  const selectedTheme = window.MemoryPilot?.getSettings?.()?.panelTheme || 'dark';
   st.textContent=`
     #${P}{position:fixed;inset:0;z-index:10001;display:flex;align-items:flex-start;justify-content:center;padding:max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)) 10px;box-sizing:border-box;font-family:-apple-system,sans-serif}
     #${P} .mask{position:absolute;inset:0;background:rgba(0,0,0,0.55);backdrop-filter:blur(5px)}
@@ -1571,6 +1572,24 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       #${P} .ma .btn{width:auto;flex:1 1 auto}
     }
   `;
+  if (selectedTheme === 'dark') {
+    st.textContent += `
+      #${P}{color:#ddd!important;color-scheme:dark}
+      #${P} .mask{background:rgba(0,0,0,.55)!important}
+      #${P} .card{background:#222327!important;border-color:rgba(255,255,255,.08)!important;box-shadow:0 16px 50px rgba(0,0,0,.5)!important}
+      #${P} .hd,#${P} .hubnav{background:#292a2f!important;border-color:rgba(255,255,255,.08)!important}
+      #${P} .hd h3,#${P} .hubtab.on{color:#fff!important}
+      #${P} .hubtab{background:#303138!important;border-color:rgba(255,255,255,.12)!important;color:#c9c7d0!important}
+      #${P} .hubtab.on,#${P} .tab.on,#${P} .ftab.on{background:rgba(124,107,240,.25)!important;border-color:rgba(124,107,240,.5)!important;color:#c4b5fd!important}
+      #${P} .tabs{background:rgba(0,0,0,.25)!important;border-color:rgba(255,255,255,.08)!important}
+      #${P} .tab,#${P} .ftab,#${P} .cfgsubtab{background:transparent!important;border-color:rgba(255,255,255,.08)!important;color:#aaa!important}
+      #${P} .bd{background:#222327!important}
+      #${P} .st,#${P} .mi,#${P} .xi,#${P} .sr,#${P} .rc,#${P} .det,#${P} .cfgcard,#${P} .memoryfilter{background:rgba(255,255,255,.025)!important;border-color:rgba(255,255,255,.08)!important;box-shadow:none!important}
+      #${P} .btn{background:rgba(255,255,255,.05)!important;border-color:rgba(255,255,255,.15)!important;color:#ddd!important}
+      #${P} .fg input,#${P} .fg textarea,#${P} .fg select,#${P} #mp_f_search{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important}
+      #${P} label,#${P} .fg label,#${P} .ht,#${P} .memoryhelpbody,#${P} .memoryfilterbody{color:#aaa!important}
+    `;
+  }
   document.head.appendChild(st);
 
   // ===== DOM =====
