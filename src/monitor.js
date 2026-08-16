@@ -461,6 +461,14 @@ const renderCardList = (items, tone, showReason, opts = {}) => {
     #${PANEL} .mask{position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px)}
     #${PANEL} .mp-dialog-card{position:relative!important;inset:auto!important;float:none!important;width:min(1180px,100%)!important;max-height:100%!important;margin:0!important;transform:none!important;box-sizing:border-box!important;overflow:auto;background:#1f2329;border:1px solid rgba(255,255,255,.08);border-radius:18px;box-shadow:0 18px 50px rgba(0,0,0,.35);color:#eef2ff;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y}
     #${PANEL} .hd{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:18px 18px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
+    #${PANEL} .topline{display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid rgba(255,255,255,.08)}
+    #${PANEL} .topactions{display:flex;align-items:center;gap:4px}
+    #${PANEL} .iconbtn{width:30px;height:30px;border:0;border-radius:50%;background:transparent;color:#aaa;font-size:17px;cursor:pointer}
+    #${PANEL} .iconbtn:hover{background:rgba(255,255,255,.08);color:#fff}
+    #${PANEL} .hubnav{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px 12px;background:#292a2f;border-bottom:1px solid rgba(255,255,255,.08)}
+    #${PANEL} .hubtab{min-height:38px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:#303138;color:#c9c7d0;font-size:12px;font-weight:600;cursor:pointer}
+    #${PANEL} .hubtab.on{background:rgba(124,107,240,.25);border-color:rgba(124,107,240,.5);color:#c4b5fd}
+    #${PANEL} .flowhint{padding:10px 16px;border-bottom:1px solid rgba(255,255,255,.08);font-size:12px;line-height:1.6;color:#b9b4c2}
     #${PANEL} .ttl{font-size:18px;font-weight:700}
     #${PANEL} .sub{font-size:12px;opacity:.75;line-height:1.6;margin-top:4px}
     #${PANEL} .actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -517,7 +525,25 @@ const renderCardList = (items, tone, showReason, opts = {}) => {
     #${PANEL} .foldtitle,#${PANEL} .grouphead{color:#eee}
     #${PANEL} .sourcetext,#${PANEL} .memorysummary,#${PANEL} .foldbody{color:#ddd}
     #${PANEL} .sourcehead,#${PANEL} .memoryevent{color:#c4b5fd}
-  ` : '');
+  ` : `
+    #${PANEL}{color:#352f3c;color-scheme:light}
+    #${PANEL} .mask{background:rgba(55,48,63,.22)}
+    #${PANEL} .mp-dialog-card{background:#f8f6fb;border-color:#ddd7e5;box-shadow:0 18px 54px rgba(63,51,76,.18)}
+    #${PANEL} .topline,#${PANEL} .hubnav{background:#fff;border-color:#e8e3ed}
+    #${PANEL} .ttl{color:#302a37}
+    #${PANEL} .hubtab{background:#faf9fb;border-color:#ded8e6;color:#625a6b}
+    #${PANEL} .hubtab.on{background:#ebe5f4;border-color:#b7a8cb;color:#675181}
+    #${PANEL} .summarybar{background:#f4f1f7;border-color:#e3dfe8}
+    #${PANEL} .summarytext{color:#655c6e}
+    #${PANEL} .btn{background:#fff;border-color:#d8d2df;color:#504858}
+    #${PANEL} .box{background:#fff;border-color:#e1dce7}
+    #${PANEL} .boxhd{border-color:#e7e2eb}
+    #${PANEL} .boxbd{color:#494151}
+    #${PANEL} .mpr_item{background:#faf8fc;border-color:#e3dde9}
+    #${PANEL} .mpr_summary{color:#494151}
+    #${PANEL} .mpr_reason{color:#765d8f}
+    #${PANEL} .flowhint{color:#655c6e;border-color:#e3dfe8}
+  `);
   document.head.appendChild(css);
 
   const root = document.createElement('div');
@@ -525,6 +551,13 @@ const renderCardList = (items, tone, showReason, opts = {}) => {
   root.innerHTML = `
     <div class="mask"></div>
     <div class="mp-dialog-card">
+      <div class="topline"><div class="ttl">MemoryPilot</div><div class="topactions"><button class="iconbtn" id="mpr_help" title="新手指引">?</button><button class="iconbtn" id="mpr_close_top" aria-label="关闭">&times;</button></div></div>
+      <nav class="hubnav" aria-label="MemoryPilot 主导航">
+        <button class="hubtab" data-hub="memory">记忆管理</button>
+        <button class="hubtab on" data-hub="monitor">召回监控</button>
+        <button class="hubtab" data-hub="settings">设置</button>
+      </nav>
+      <div class="flowhint">用户发送消息 → MemoryPilot 寻找相关记忆 → 把入选记忆交给 AI → AI 生成回复。<br>本页记录最近一次真实召回，不预测下一次召回，也不会修改召回结果。</div>
       <div class="hd">
         <div>
           <div class="ttl">召回监控</div>
@@ -624,7 +657,12 @@ $('mpr_status').textContent = latest.due === false ? (same ? '本回合不是正
     });
   };
 
-  $('mpr_close').onclick = () => { root.remove(); css.remove(); };
+  const closeMonitor = () => { root.remove(); css.remove(); };
+  $('mpr_close').onclick = closeMonitor;
+  $('mpr_close_top').onclick = closeMonitor;
+  root.querySelector('[data-hub="memory"]')?.addEventListener('click', () => window.MemoryPilot?.openPanel?.('list'));
+  root.querySelector('[data-hub="settings"]')?.addEventListener('click', () => window.MemoryPilot?.openApiConfig?.());
+  $('mpr_help').onclick = async () => { await window.MemoryPilot?.openPanel?.('list'); setTimeout(() => document.getElementById('mp_help')?.click(), 180); };
   $('mpr_refresh').onclick = async () => {
     setBusy(true, '正在刷新模拟...');
     try { await updateView(); toastr?.success?.('模拟刷新完成'); } finally { setBusy(false); }

@@ -98,7 +98,7 @@ export async function openApiConfig() {
   st.textContent = `
     #${PANEL} { position:fixed!important;inset:0!important;z-index:10002;display:grid!important;place-items:center!important;width:100vw!important;height:100vh!important;height:100dvh!important;margin:0!important;padding:max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)) 12px;box-sizing:border-box!important;overflow:hidden!important;transform:none!important;font-family:-apple-system,sans-serif;isolation:isolate; }
     #${PANEL} .mask { position:absolute;inset:0;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px); }
-    #${PANEL} .mp-dialog-card { position:relative!important;inset:auto!important;float:none!important;width:100%!important;max-width:560px!important;max-height:100%!important;margin:0!important;transform:none!important;box-sizing:border-box!important;background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);padding:20px;box-shadow:0 16px 48px rgba(0,0,0,0.5);overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y; }
+    #${PANEL} .mp-dialog-card { position:relative!important;inset:auto!important;float:none!important;width:100%!important;max-width:760px!important;max-height:100%!important;margin:0!important;transform:none!important;box-sizing:border-box!important;background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);padding:0;box-shadow:0 16px 48px rgba(0,0,0,0.5);overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y; }
     #${PANEL} h3 { margin:0 24px 16px 0;color:#fff;font-size:16px; }
     #${PANEL} .f { margin-bottom:12px; }
     #${PANEL} .f label { display:block;color:#aaa;font-size:11px;margin-bottom:3px; }
@@ -115,9 +115,24 @@ export async function openApiConfig() {
     #${PANEL} .status { margin-top:10px;padding:8px 12px;border-radius:6px;font-size:12px; }
     #${PANEL} .status.ok { background:rgba(74,222,128,0.12);color:#4ade80; }
     #${PANEL} .status.err { background:rgba(248,113,113,0.12);color:#f87171; }
+    #${PANEL} .topline{display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid rgba(255,255,255,.08)}
+    #${PANEL} .topline h3{margin:0;color:#fff;font-size:18px}
+    #${PANEL} .topactions{display:flex;align-items:center;gap:4px}
+    #${PANEL} .help{width:30px;height:30px;border:0;border-radius:50%;background:transparent;color:#aaa;font-size:17px;cursor:pointer}
+    #${PANEL} .help:hover{background:rgba(255,255,255,.08);color:#fff}
+    #${PANEL} .hubnav{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px 12px;background:#292a2f;border-bottom:1px solid rgba(255,255,255,.08)}
+    #${PANEL} .hubtab{min-height:38px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:#303138;color:#c9c7d0;font-size:12px;font-weight:600;cursor:pointer}
+    #${PANEL} .hubtab.on{background:rgba(124,107,240,.25);border-color:rgba(124,107,240,.5);color:#c4b5fd}
+    #${PANEL} .topline .close{position:static}
+    #${PANEL} .settingsnav{display:flex;gap:6px;overflow-x:auto;padding:8px 14px;background:#26272c;border-bottom:1px solid rgba(255,255,255,.08);scrollbar-width:none}
+    #${PANEL} .settingsnav::-webkit-scrollbar{display:none}
+    #${PANEL} .settab{flex:0 0 auto;padding:7px 12px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:#303138;color:#c9c7d0;font-size:11px;cursor:pointer}
+    #${PANEL} .settab.on{background:rgba(124,107,240,.25);color:#c4b5fd;border-color:rgba(124,107,240,.5)}
+    #${PANEL} .formbody{padding:16px 20px 20px}
+    #${PANEL} .sectionintro{margin:0 0 14px;color:#ddd;font-size:13px;font-weight:700}
     @media(max-width:560px) {
       #${PANEL} { padding:max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)) 8px; }
-      #${PANEL} .mp-dialog-card { max-width:100%!important;padding:16px;border-radius:10px; }
+      #${PANEL} .mp-dialog-card { max-width:100%!important;padding:0;border-radius:10px; }
       #${PANEL} .row { flex-direction:column;align-items:stretch; }
       #${PANEL} .row .btn { width:100%; }
     }
@@ -129,7 +144,7 @@ export async function openApiConfig() {
   ` + (selectedTheme === 'light' ? `
     #${PANEL}{color:#352f3c;color-scheme:light}
     #${PANEL} .mask{background:rgba(55,48,63,.22)}
-    #${PANEL} .card{background:#f8f6fb;border-color:#ddd7e5;box-shadow:0 18px 54px rgba(63,51,76,.18)}
+    #${PANEL} .mp-dialog-card{background:#f8f6fb;border-color:#ddd7e5;box-shadow:0 18px 54px rgba(63,51,76,.18);color:#352f3c}
     #${PANEL} .topline,#${PANEL} .hubnav{background:#fff;border-color:#e8e3ed}
     #${PANEL} h3{color:#302a37}
     #${PANEL} .hubtab{background:#faf9fb;border-color:#ded8e6;color:#625a6b}
@@ -148,7 +163,19 @@ export async function openApiConfig() {
   root.innerHTML = `
     <div class="mask"></div>
     <div class="mp-dialog-card">
-      <button class="close" id="mpa_close">&times;</button>
+      <div class="topline"><h3>MemoryPilot</h3><div class="topactions"><button class="help" id="mpa_help" aria-label="打开新手指引" title="新手指引">?</button><button class="close" id="mpa_close" aria-label="关闭">&times;</button></div></div>
+      <nav class="hubnav" aria-label="MemoryPilot 主导航">
+        <button class="hubtab" data-hub="memory">记忆管理</button>
+        <button class="hubtab" data-hub="monitor">召回监控</button>
+        <button class="hubtab on" data-hub="settings">设置</button>
+      </nav>
+      <nav class="settingsnav" aria-label="设置分类">
+        <button class="settab on">API 配置</button>
+        <button class="settab" data-open-panel="recall">召回设置</button>
+        <button class="settab" data-open-panel="filter">文本过滤</button>
+      </nav>
+      <div class="formbody">
+      <div class="sectionintro">楼层总结与关键词处理 API</div>
       <h3>Memory Pilot - API 配置</h3>
 
       <div class="f">
@@ -190,9 +217,14 @@ export async function openApiConfig() {
 
       <button class="btn btn-p" id="mpa_save" style="width:100%;padding:10px;font-size:13px;">保存</button>
       <div id="mpa_status"></div>
+      </div>
     </div>
   `;
   document.body.appendChild(root);
+  root.querySelector('[data-hub="memory"]')?.addEventListener('click', () => window.MemoryPilot?.openPanel?.('list'));
+  root.querySelector('[data-hub="monitor"]')?.addEventListener('click', () => window.MemoryPilot?.openMonitor?.());
+  $('mpa_help').onclick = async () => { await window.MemoryPilot?.openPanel?.('list'); setTimeout(() => document.getElementById('mp_help')?.click(), 180); };
+  root.querySelectorAll('[data-open-panel]').forEach(btn => btn.addEventListener('click', () => window.MemoryPilot?.openPanel?.('cfg', btn.getAttribute('data-open-panel'))));
 
   const applyProviderUI = (mode) => {
     const def = defaultsByProvider[mode] || defaultsByProvider.openai;

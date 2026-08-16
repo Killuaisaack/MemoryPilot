@@ -1239,8 +1239,15 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     #${P} .mp-dialog-card{position:relative!important;inset:auto!important;float:none!important;width:100%!important;max-width:960px!important;height:100%!important;max-height:100%!important;margin:0!important;transform:none!important;box-sizing:border-box!important;background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);display:flex!important;flex-direction:column!important;overflow:hidden!important;box-shadow:0 16px 50px rgba(0,0,0,0.5)}
     #${P} .hd{padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0}
     #${P} .hd h3{margin:0;color:#fff;font-size:16px}
+    #${P} .hdactions{display:flex;align-items:center;gap:4px}
+    #${P} .helpbtn{width:28px;height:28px;border:0;border-radius:50%;background:none;color:#888;font-size:17px;cursor:pointer}
+    #${P} .helpbtn:hover{background:rgba(255,255,255,.1);color:#fff}
     #${P} .cls{background:none;border:none;color:#888;font-size:22px;cursor:pointer;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:50%}
     #${P} .cls:hover{background:rgba(255,255,255,0.1);color:#fff}
+    #${P} .hubnav{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px 12px;background:rgba(0,0,0,.25);border-bottom:1px solid rgba(255,255,255,.08);flex-shrink:0}
+    #${P} .hubtab{min-height:36px;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:rgba(255,255,255,.03);color:#aaa;font-size:12px;font-weight:600;cursor:pointer}
+    #${P} .hubtab:hover{background:rgba(255,255,255,.08);color:#fff}
+    #${P} .hubtab.on{background:rgba(124,107,240,.2);border-color:rgba(124,107,240,.45);color:#c4b5fd}
     #${P} .tabs{display:flex;gap:4px;padding:7px 12px;background:rgba(0,0,0,0.25);flex-wrap:wrap;flex-shrink:0}
     #${P} .ftab{padding:6px 11px;border-radius:7px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:#aaa;cursor:pointer;font-size:11px;white-space:nowrap}
     #${P} .ftab:hover{background:rgba(255,255,255,0.05);color:#fff}
@@ -1344,6 +1351,12 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     #${P} .mp-dialog-card{background:#f8f6fb;border-color:#ddd7e5;box-shadow:0 18px 54px rgba(63,51,76,.18)}
     #${P} .hd{border-color:#e8e3ed;background:#fff}
     #${P} .hd h3{color:#302a37}
+    #${P} .hubnav{background:#fff;border-color:#e8e3ed}
+    #${P} .hubtab{background:#faf9fb;border-color:#ded8e6;color:#625a6b}
+    #${P} .hubtab:hover{background:#f1edf6;color:#3e3547}
+    #${P} .hubtab.on{background:#ebe5f4;border-color:#b7a8cb;color:#675181}
+    #${P} .helpbtn{color:#756d7e}
+    #${P} .helpbtn:hover{background:#f0ecf5;color:#3f3748}
     #${P} .cls{color:#756d7e}
     #${P} .cls:hover{background:#f0ecf5;color:#3f3748}
     #${P} .tabs{background:#fff;border-bottom:1px solid #e8e3ed}
@@ -1370,7 +1383,12 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   root.innerHTML=`
     <div class="mask"></div>
     <div class="mp-dialog-card">
-      <div class="hd"><h3>Memory Pilot</h3><button class="cls" id="mp_cls">&times;</button></div>
+      <div class="hd"><h3>MemoryPilot</h3><div class="hdactions"><button class="helpbtn" id="mp_help" aria-label="打开新手指引" title="新手指引">?</button><button class="cls" id="mp_cls" aria-label="关闭">&times;</button></div></div>
+      <nav class="hubnav" aria-label="MemoryPilot 主导航">
+        <button class="hubtab on" data-hub="memory">记忆管理</button>
+        <button class="hubtab" data-hub="monitor">召回监控</button>
+        <button class="hubtab" data-hub="settings">设置</button>
+      </nav>
       <div class="tabs">
         <button class="tab on" data-t="list">记忆列表</button>
         <button class="tab" data-t="add">编辑</button>
@@ -1540,6 +1558,36 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     </div>
   `;
   document.body.appendChild(root);
+  // Match the reference package wording for the text-cleaning controls while
+  // keeping the existing storage/configuration IDs and behavior intact.
+  const cleanText = (id, label, hint) => {
+    const field = document.getElementById(id);
+    const box = field?.closest('.fg');
+    if (!box) return;
+    const title = box.querySelector('label');
+    if (title) title.textContent = label;
+    const note = box.nextElementSibling?.classList.contains('ht') ? box.nextElementSibling : null;
+    if (note && hint) note.textContent = hint;
+  };
+  cleanText('mp_ctags', '块级筛除标签（每行一个，不区分大小写）', '会整段删除 <tag>...</tag>，适合 think、details、meta、ooc 这类结构层内容。');
+  cleanText('mp_cprefix', '行级筛除前缀（每行一个）', '适合 affinity_change:、mood_change:、state_update: 这类单行元信息。');
+  cleanText('mp_cregex', '用正则删除内容（高级）', '每行填写一条正则表达式，不需要添加两侧的 /，也不需要填写 g。例如删除 HTML 注释可填写 <!--[\\s\\S]*?-->');
+
+  // Reference-package wording and guidance for text cleaning.
+  cleanText('mp_ctags', '块级筛除标签（每行一个，不区分大小写）', '会整段删除 <tag>...</tag>，适合 think、details、meta、ooc 这类结构层内容。');
+  cleanText('mp_cprefix', '行级筛除前缀（每行一个）', '适合 affinity_change:、mood_change:、state_update: 这类单行元信息。');
+  cleanText('mp_cregex', '用正则删除内容（高级）', '每行填写一条正则表达式，不需要添加两侧的 /，也不需要填写 g。例如删除 HTML 注释可填写 <!--[\\s\\S]*?-->。');
+  const cfgPage = document.getElementById('mp_pg_cfg');
+  if (cfgPage && !cfgPage.querySelector('.mp-clean-intro')) {
+    const intro = document.createElement('div');
+    intro.className = 'mp-clean-intro ht';
+    intro.innerHTML = '<strong>文本清洗</strong><br>插件在匹配记忆关键词或总结楼层前，会按照下方规则删除不需要参与处理的内容。<br>文本清洗只影响插件读取到的文本，不会修改聊天原文。';
+    cfgPage.insertBefore(intro, cfgPage.firstElementChild?.nextElementSibling || cfgPage.firstElementChild);
+  }
+  const recallScope = cfgPage?.querySelector('#mp_c_recall')?.parentElement;
+  const batchScope = cfgPage?.querySelector('#mp_c_batch')?.parentElement;
+  if (recallScope) recallScope.lastChild.textContent = '召回匹配前清洗';
+  if (batchScope) batchScope.lastChild.textContent = '楼层总结前清洗';
 
   let selectedIds = new Set();
   let searchPicked = new Set();
@@ -1928,6 +1976,14 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   root.querySelectorAll('.tab').forEach(t=>{t.onclick=()=>{
     activateTab(t.dataset.t);
   };});
+  root.querySelector('[data-hub="monitor"]')?.addEventListener('click', () => window.MemoryPilot?.openMonitor?.());
+  root.querySelector('[data-hub="settings"]')?.addEventListener('click', () => window.MemoryPilot?.openApiConfig?.());
+  root.querySelector('[data-hub="memory"]')?.addEventListener('click', () => {
+    root.querySelectorAll('[data-hub]').forEach(b => b.classList.remove('on'));
+    root.querySelector('[data-hub="memory"]')?.classList.add('on');
+    activateTab('list');
+  });
+  $('mp_help')?.addEventListener('click', () => showGuide(false));
 
   $('mp_sv').onclick=async()=>{
     const ev=$('mp_fe').value.trim();
