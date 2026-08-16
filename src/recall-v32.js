@@ -1,8 +1,12 @@
 // MemoryPilot Recall Engine - auto-transformed from taskjs
 // Storage: extensionSettings (NOT chatMetadata)
 // Prompt injection: chatMetadata.variables only
+import { createAnimaDedupeSession } from './anima-dedupe.js';
+import { createXiaobaixDedupeSession } from './xiaobaix-dedupe.js';
+import { saveRecallSnapshot } from './recall-monitor-state.js';
 
 export async function runRecall() {
+  const options = arguments[0] || {};
 (async () => {
   let MAX_RECALL = 6;
   const MK = 'mp_memories';
@@ -212,7 +216,7 @@ export async function runRecall() {
     return text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
   };
 
-  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6 };
+  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6, animaDedupe: true, xiaobaixDedupe: true };
   const normalizeRecallSettings = (cfg) => {
     const src = cfg && typeof cfg === 'object' ? cfg : {};
     return {
@@ -220,7 +224,9 @@ export async function runRecall() {
       alpha: clamp(Number.isFinite(Number(src.alpha)) ? Number(src.alpha) : DEF_RECALL_SETTINGS.alpha, 0, 0.95),
       stickyTurns: clamp(Math.round(Number(src.stickyTurns) ?? DEF_RECALL_SETTINGS.stickyTurns), 0, 20),
       contextWindow: clamp(Math.round(Number(src.contextWindow) || DEF_RECALL_SETTINGS.contextWindow), 3, 30),
-      maxRecall: clamp(Math.round(Number(src.maxRecall) || DEF_RECALL_SETTINGS.maxRecall), 1, 20)
+      maxRecall: clamp(Math.round(Number(src.maxRecall) || DEF_RECALL_SETTINGS.maxRecall), 1, 20),
+      animaDedupe: src.animaDedupe !== false,
+      xiaobaixDedupe: src.xiaobaixDedupe !== false
     };
   };
 
@@ -344,6 +350,11 @@ export async function runRecall() {
     return;
   }
   memories = dedupeByFingerprint(memories);
+  const sourceMemoryById = new Map(memories.map(memory => [String(memory?.id ?? ''), memory]));
+  const animaDedupe = await createAnimaDedupeSession({ enabled: options.animaDedupe ?? recallCfg.animaDedupe, context: ctx });
+  const xiaobaixDedupe = await createXiaobaixDedupeSession({ enabled: options.xiaobaixDedupe ?? recallCfg.xiaobaixDedupe, context: ctx });
+  memories = animaDedupe.filter(memories);
+  memories = xiaobaixDedupe.filter(memories);
 
   const turnCounter = Math.max(0, Number(metaRoot().turnCounter || 0)) + 1;
   await syncMeta({ turnCounter, recallEvery: RECALL_EVERY });
@@ -363,7 +374,8 @@ export async function runRecall() {
 
     const stickyMems = [];
     for (const [sid, st] of Object.entries(stickyRaw)) {
-      if (st.turnsLeft > 0 && st.event && st.summary) {
+      const candidate = { ...(sourceMemoryById.get(String(sid)) || {}), ...st, id: sid };
+      if (st.turnsLeft > 0 && st.event && st.summary && !animaDedupe.isDuplicate(candidate) && !xiaobaixDedupe.isDuplicate(candidate)) {
         stickyMems.push(st);
       }
     }
@@ -373,7 +385,8 @@ export async function runRecall() {
     // 衰减 sticky
     const nextSticky = {};
     for (const [sid, st] of Object.entries(stickyRaw)) {
-      if (st.turnsLeft > 1) {
+      const candidate = { ...(sourceMemoryById.get(String(sid)) || {}), ...st, id: sid };
+      if (st.turnsLeft > 1 && !animaDedupe.isDuplicate(candidate) && !xiaobaixDedupe.isDuplicate(candidate)) {
         nextSticky[sid] = { ...st, turnsLeft: st.turnsLeft - 1 };
       }
     }
@@ -383,6 +396,22 @@ export async function runRecall() {
 
   const recent = chat.slice(-CTX_MSGS);
   const currentFloorRange = recent.length ? [chat.length - recent.length + 1, chat.length] : null;
+  const sourceMessages = recent.map((m, index) => {
+    const raw = String(m?.mes || '');
+    return { floor: chat.length - recent.length + index + 1, speaker: m?.is_user ? '用户' : (m?.name || '角色'), raw, cleaned: cleanerCfg.cleanForRecall ? applyCleaner(raw, cleanerCfg) : raw };
+  });
+  const recordSnapshot = ({ evaluated, pinned = [], triggered = [], note = '' }) => {
+    saveRecallSnapshot({
+      version: 'v32', evaluated: !!evaluated, contextWindow: CTX_MSGS, recallEvery: RECALL_EVERY,
+      maxRecall: MAX_RECALL, stickyTurns: recallCfg.stickyTurns ?? 5,
+      animaDedupeEnabled: recallCfg.animaDedupe !== false, animaDedupeActive: !!animaDedupe.active,
+      animaDedupeRemoved: animaDedupe.removedIds?.size || 0,
+      xiaobaixDedupeEnabled: recallCfg.xiaobaixDedupe !== false, xiaobaixDedupeActive: !!xiaobaixDedupe.active,
+      xiaobaixDedupeRemoved: xiaobaixDedupe.removedIds?.size || 0, sources: sourceMessages,
+      pinned: pinned.map(m => ({ id: m?.id ?? '', event: String(m?.event || ''), summary: String(m?.summary || ''), priority: m?.priority || 'high', reason: String(m?._reason || '常驻记忆') })),
+      triggered: triggered.map(m => ({ id: m?.id ?? '', event: String(m?.event || ''), summary: String(m?.summary || ''), priority: m?.priority || 'medium', reason: String(m?._reason || '') })), note,
+    });
+  };
   const recentTexts = recent.map(m => {
     const raw = m?.mes || '';
     return cleanerCfg.cleanForRecall ? applyCleaner(raw, cleanerCfg) : String(raw);
@@ -561,5 +590,6 @@ export async function runRecall() {
 
   await saveText('mp_recall_pin', fmtPin);
   await saveText('mp_recall_ctx', fmtCtx);
+  recordSnapshot({ evaluated: true, pinned: finalPinned, triggered: finalWithSticky });
 })();
 }

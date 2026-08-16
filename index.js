@@ -9,6 +9,15 @@ import { openPanel } from './src/panel.js';
 import { openApiConfig } from './src/api-config.js';
 import { openMonitor } from './src/monitor.js';
 import {
+  initializeAutoSummary,
+  loadAutoSummaryConfig,
+  loadAutoSummaryState,
+  saveAutoSummaryConfig,
+  retryAutoSummary,
+  syncAutoHiddenMessages,
+  handleAutoSummaryChatDeleted,
+} from './src/auto-summary.js';
+import {
   migrateIfNeeded,
   detectLegacyArtifacts,
   cleanupLegacyArtifacts,
@@ -102,7 +111,25 @@ window.MemoryPilot = {
   getMemoryRecoverySnapshots,
   restoreMemoriesFromSnapshot,
   flushStorageNow,
+  loadAutoSummaryConfig,
+  loadAutoSummaryState,
+  saveAutoSummaryConfig,
+  retryAutoSummary,
+  syncAutoHiddenMessages,
 };
+
+async function setOfficialMessageVisibility(start, end, unhide) {
+  const { hideChatMessageRange } = await import('../../../chats.js');
+  if (typeof hideChatMessageRange !== 'function') {
+    throw new Error('当前 SillyTavern 版本不支持可逆的楼层隐藏');
+  }
+  await hideChatMessageRange(start, end, unhide);
+}
+
+async function saveOfficialChat() {
+  const { saveChatConditional } = await import('../../../script.js');
+  if (typeof saveChatConditional === 'function') await saveChatConditional();
+}
 
 // ====== Wand Menu (Extensions Menu / 魔法棒) Buttons ======
 
@@ -428,6 +455,8 @@ function hookRecall() {
     ctx.eventSource.on(ctx.eventTypes.MESSAGE_DELETED, async () => {
       try {
         const result = await handleChatMessageDeleted();
+        await handleAutoSummaryChatDeleted(result?.deletedFloor);
+        await syncAutoHiddenMessages();
         if (result.removed > 0) {
           toastr?.info?.(`已回退到第 ${result.deletedFloor} 楼，移除 ${result.removed} 条受影响记忆`);
         }
@@ -511,4 +540,8 @@ jQuery(async () => {
   });
 
   hookRecall();
+  initializeAutoSummary({
+    setMessageVisibility: setOfficialMessageVisibility,
+    saveChat: saveOfficialChat,
+  });
 });

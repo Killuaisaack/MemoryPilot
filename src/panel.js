@@ -2,8 +2,10 @@
 // Storage: extensionSettings (NOT chatMetadata)
 
 import { loadMemories, saveMemories } from './storage.js';
+import { loadCurrentAnimaSummaries } from './anima-adapter.js';
+import { findLegacyHoraeCoverage, isLegacyHoraeSummaryMemory, loadCurrentHoraeMemories } from './horae-adapter.js';
 
-export async function openPanel() {
+export async function openPanel(initialTab = 'list', initialCfg = 'recall') {
 (async () => {
 
   const dedupeByFingerprint = (list) => {
@@ -18,7 +20,15 @@ export async function openPanel() {
     return out;
   };
   const P='mp_main_panel', S='mp_main_style', MK='mp_memories', AK='mp_api_config', PK='mp_prompt', KPK='mp_kw_rebuild_prompt', BK='mp_kw_blacklist', CK='mp_text_clean_cfg', RK='mp_recall_settings';
-  const selectedTheme = window.MemoryPilot?.getSettings?.()?.panelTheme || 'dark';
+  const RECALL_INJECT_PROMPT = `## 持续生效的核心记忆
+{{getvar::mp_recall_pin}}
+
+这些内容属于长期稳定记忆，回复时应始终保持一致。
+
+## 当前话题触发的相关记忆
+{{getvar::mp_recall_ctx}}
+
+这些内容只在与当前话题相关时自然参考，不要逐条复述，不要直接照抄原句。`;
   const ctx = window.SillyTavern?.getContext?.();
   if (!ctx) return;
   const chat = ctx.chat || [];
@@ -41,13 +51,20 @@ export async function openPanel() {
   }
   const $ = id => document.getElementById(id);
   const h = s => String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const migratePromptTerms = p => String(p ?? '')
+    .replace(/主要召回关键词/g, '主关键词')
+    .replace(/主召回关键词/g, '主关键词')
+    .replace(/门控关键词/g, '辅助关键词');
   const gid = () => 'mp_'+Math.random().toString(36).slice(2,10);
   const norm = s => String(s??'').toLowerCase().trim();
   const normalizeOpenAIBase = s => String(s ?? '').trim().replace(/\/+$/,'').replace(/\/chat\/completions$/i,'');
   const normalizeClaudeBase = s => String(s ?? '').trim().replace(/\/+$/,'').replace(/\/v1\/messages$/i,'');
   const normalizeGeminiBase = s => String(s ?? '').trim().replace(/\/+$/,'').replace(/\/models\/.*$/i,'');
 
-  if ($(P)){$(P).remove();$(S)?.remove();return;}
+  if ($(P)){
+    if(window._mpAnimaSummaryListener) document.removeEventListener('anima_summary_written',window._mpAnimaSummaryListener);
+    $(P).remove();$(S)?.remove();return;
+  }
   try { document.getElementById('mp_api_panel')?.remove(); document.getElementById('mp_api_style')?.remove(); } catch {}
   try { document.getElementById('mp_recall_monitor_panel')?.remove(); document.getElementById('mp_recall_monitor_style')?.remove(); } catch {}
 
@@ -232,7 +249,7 @@ export async function openPanel() {
     await pushJson(CK, cleanerCfg);
   };
 
-  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6 };
+  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6, animaDedupe: true, xiaobaixDedupe: true };
   const normalizeRecallSettings = (cfg) => {
     const src = cfg && typeof cfg === 'object' ? cfg : {};
     const num = (v, d) => Number.isFinite(Number(v)) ? Number(v) : d;
@@ -242,7 +259,9 @@ export async function openPanel() {
       alpha: clamp(num(src.alpha, DEF_RECALL_SETTINGS.alpha), 0, 0.95),
       stickyTurns: clamp(Math.round(num(src.stickyTurns, DEF_RECALL_SETTINGS.stickyTurns)), 0, 20),
       contextWindow: clamp(Math.round(num(src.contextWindow, DEF_RECALL_SETTINGS.contextWindow)), 3, 30),
-      maxRecall: clamp(Math.round(num(src.maxRecall, DEF_RECALL_SETTINGS.maxRecall)), 1, 20)
+      maxRecall: clamp(Math.round(num(src.maxRecall, DEF_RECALL_SETTINGS.maxRecall)), 1, 20),
+      animaDedupe: src.animaDedupe !== false,
+      xiaobaixDedupe: src.xiaobaixDedupe !== false
     };
   };
   let recallCfg = normalizeRecallSettings(await pullJson(RK, DEF_RECALL_SETTINGS));
@@ -299,26 +318,34 @@ export async function openPanel() {
       .replace(/[，。、！？；：,.;:!?\-#()（）《》【】\[\]{}"'“”‘’\/\\|\n\r\t]/g, '');
 
   const memFingerprint = (m) =>
-    [textKey(m?.event || ''), textKey(m?.summary || ''), textKey((m?.source || '') + '|' + (m?.xbEventId || ''))].join('||');
+    [textKey(m?.event || ''), textKey(m?.summary || ''), textKey((m?.source || '') + '|' + (m?.xbEventId || '') + '|' + (m?.animaSummaryId || '') + '|' + (m?.horaeMemoryId || ''))].join('||');
 
   const dedupeMemories = (list) => {
     const out = [];
     const seenId = new Set();
     const seenXb = new Set();
+    const seenAnima = new Set();
+    const seenHorae = new Set();
     const seenFp = new Set();
 
     for (const item of Array.isArray(list) ? list : []) {
       if (!item) continue;
       const id = String(item.id ?? '');
       const xb = item.xbEventId ? `xb:${String(item.xbEventId)}` : '';
+      const anima = item.animaSummaryId ? `anima:${String(item.animaSummaryId)}` : '';
+      const horae = item.horaeMemoryId ? `horae:${String(item.horaeMemoryId)}` : '';
       const fp = memFingerprint(item);
 
       if (id && seenId.has(id)) continue;
       if (xb && seenXb.has(xb)) continue;
+      if (anima && seenAnima.has(anima)) continue;
+      if (horae && seenHorae.has(horae)) continue;
       if (fp && seenFp.has(fp)) continue;
 
       if (id) seenId.add(id);
       if (xb) seenXb.add(xb);
+      if (anima) seenAnima.add(anima);
+      if (horae) seenHorae.add(horae);
       if (fp) seenFp.add(fp);
       out.push(item);
     }
@@ -328,10 +355,14 @@ export async function openPanel() {
   const upsertMemory = (list, nextMem) => {
     const arr = Array.isArray(list) ? [...list] : [];
     const nextXbId = nextMem?.xbEventId ? String(nextMem.xbEventId) : '';
+    const nextAnimaId = nextMem?.animaSummaryId ? String(nextMem.animaSummaryId) : '';
+    const nextHoraeId = nextMem?.horaeMemoryId ? String(nextMem.horaeMemoryId) : '';
     const nextId = nextMem?.id ? String(nextMem.id) : '';
 
     let idx = -1;
     if (nextXbId) idx = arr.findIndex(x => String(x?.xbEventId || '') === nextXbId);
+    if (idx < 0 && nextAnimaId) idx = arr.findIndex(x => String(x?.animaSummaryId || '') === nextAnimaId);
+    if (idx < 0 && nextHoraeId) idx = arr.findIndex(x => String(x?.horaeMemoryId || '') === nextHoraeId);
     if (idx < 0 && nextId) idx = arr.findIndex(x => String(x?.id || '') === nextId);
     if (idx < 0) {
       const fp = memFingerprint(nextMem);
@@ -438,7 +469,7 @@ export async function openPanel() {
 聚合原则：同一场景（同一时间段、同一地点、同一组人物的连续互动）合并为一条事件。但如果场景中有明确的话题转折或情感转折，可以拆成2-3条。20条对话通常提取3-6条事件。
 
 每行输出一个 JSON：
-{"event":"场景标题","primaryKeywords":["主召回关键词"],"secondaryKeywords":["门控关键词"],"entityKeywords":["人物名"],"summary":"详细摘要","timeLabel":"时间标签","timeValue":1234,"floorRange":[起始楼层号,结束楼层号],"priority":"high/medium/low"}
+{"event":"场景标题","primaryKeywords":["主关键词"],"secondaryKeywords":["辅助关键词"],"entityKeywords":["人物名"],"summary":"详细摘要","timeLabel":"时间标签","timeValue":1234,"floorRange":[起始楼层号,结束楼层号],"priority":"high/medium/low"}
 
 规则：
 
@@ -453,13 +484,13 @@ summary 是最重要的字段。要求：
 - 不要概括为"讨论了战争""表达了感情"，要写出具体说了什么、怎么表达的
 - 可以用分号连接多个连续动作，不需要每个动作单独成句
 
-primaryKeywords（2-6个）：
+primaryKeywords（主关键词，2-6个）：
 - 必须是后续 RP 对话中会被原封不动写出来的词
 - 优先：具体地名、物品名、活动名、独特称呼/代号、关键台词中的名词
 - 例如：「D-12舱室」「三明治」「处分单」「陈胜吴广」「达喀尔」「银星勋章」
 - 不要写：「关系突破」「信任危机」「情感表达」这类概括词
 
-secondaryKeywords（2-6个）：
+secondaryKeywords（辅助关键词，2-6个）：
 - 必须是对话中真的会出现的具体词
 - 优先：关键动作词、场景特征词、结果词
 - 例如：「开门」「道歉」「深夜」「脊椎」「齿痕」「沉默」
@@ -476,8 +507,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 对话：
 {{content}}`;
   const loadPrompt=()=>{
-    try{const g=window.MemoryPilot?.getCustomPrompt?.('analysis');if(g)return g;}catch{}
-    try{const r=localStorage.getItem(PK);if(r){if(/\"keywords\"\s*:/.test(r)&&!/primaryKeywords/.test(r))return DEF_PROMPT;return r;}}catch{}
+    try{const g=window.MemoryPilot?.getCustomPrompt?.('analysis');if(g)return migratePromptTerms(g);}catch{}
+    try{const r=localStorage.getItem(PK);if(r){if(/\"keywords\"\s*:/.test(r)&&!/primaryKeywords/.test(r))return DEF_PROMPT;return migratePromptTerms(r);}}catch{}
     return DEF_PROMPT;
   };
   const savePrompt=async(p)=>{
@@ -505,11 +536,11 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 {{context}}`;
 
   const DEF_KW_PROMPT = `请根据以下记忆条目，为记忆召回系统重构关键词分层。只输出一个 JSON：
-{"primaryKeywords":["主召回关键词"],"secondaryKeywords":["门控关键词"],"entityKeywords":["人物名"]}
+{"primaryKeywords":["主关键词"],"secondaryKeywords":["辅助关键词"],"entityKeywords":["人物名"]}
 
 规则：
-1. primaryKeywords 是主召回关键词：必须是后续对话中会被直接写出来的原词，例如具体地名（"图书馆""天台"）、具体物品名（"银星勋章"）、具体活动名（"击剑比赛"）、人物间的独特称呼或代号；不要写概括性标签，不要放人物名；控制在 2-6 个。
-2. secondaryKeywords 是门控关键词：用于限制语境，必须是对话中真的会出现的具体词，例如动作词（"道歉""逃跑"）、场景词（"雨天""教室"）、结果词（"受伤""和解"）；不要写抽象归纳，不要和 primaryKeywords 重复；不要放人物名；控制在 2-6 个。
+1. primaryKeywords 是主关键词：必须是后续对话中会被直接写出来的原词，例如具体地名（"图书馆""天台"）、具体物品名（"银星勋章"）、具体活动名（"击剑比赛"）、人物间的独特称呼或代号；不要写概括性标签，不要放人物名；控制在 2-6 个。
+2. secondaryKeywords 是辅助关键词：用于辅助判断聊天语境，必须是对话中真的会出现的具体词，例如动作词（"道歉""逃跑"）、场景词（"雨天""教室"）、结果词（"受伤""和解"）；不要写抽象归纳，不要和 primaryKeywords 重复；不要放人物名；控制在 2-6 个。
 3. entityKeywords 只写人物名或角色称呼，用于展示，不参与召回。
 4. 不要输出泛词，例如“对话”“事情”“关系”“交流”“发生”；如果信息不足，宁可少写，不要臆造。
 5. 只输出 JSON，不要解释。
@@ -521,8 +552,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 时间：{{timeLabel}}
 楼层：{{floorRange}}`;
   const loadKwPrompt=()=>{
-    try{const g=window.MemoryPilot?.getCustomPrompt?.('kwRebuild');if(g)return g;}catch{}
-    try{const r=localStorage.getItem(KPK);if(r){if(!/primaryKeywords/.test(r)||!/secondaryKeywords/.test(r))return DEF_KW_PROMPT;return r;}}catch{}
+    try{const g=window.MemoryPilot?.getCustomPrompt?.('kwRebuild');if(g)return migratePromptTerms(g);}catch{}
+    try{const r=localStorage.getItem(KPK);if(r){if(!/primaryKeywords/.test(r)||!/secondaryKeywords/.test(r))return DEF_KW_PROMPT;return migratePromptTerms(r);}}catch{}
     return DEF_KW_PROMPT;
   };
   const saveKwPrompt=async(p)=>{
@@ -598,7 +629,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       return '事件' + (i + 1) + '：\n事件名：' + (m.event || '') + '\n摘要：' + (m.summary || '') + '\n时间：' + (m.timeLabel || '') + '\n楼层：' + fr + '\n优先级：' + (m.priority || 'medium');
     }).join('\n\n');
     const context = includeContext ? getMergeContext(mems) : '';
-    return loadMergePrompt().replace('{{memories}}', memText).replace('{{context}}', context || '（未关联原文）');
+    return loadMergePrompt().replace('{{memories}}', memText).replace('{{context}}', context || '（未参考原文）');
   };
 
   const mergeKeywordsDefault = (mems) => {
@@ -650,6 +681,21 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     return out.join(', ');
   };
 
+  const updateSearchStatus = (suffix = '') => {
+    const el = $('mp_bk_status');
+    if (!el) return;
+    const found = lastSearchResults.length ? `找到 ${lastSearchResults.length} 层` : '尚无搜索结果';
+    el.textContent = `${found} · 已选择 ${searchPicked.size} 层${suffix ? ` · ${suffix}` : ''}`;
+  };
+
+  const applyPickedFloors = () => {
+    const nums = [...searchPicked].map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+    if (!nums.length) { toastr?.warning?.('请先勾选需要总结的楼层'); return; }
+    $('mp_bf').value = compressNums(nums);
+    updateSearchStatus(`已填入 ${nums.length} 层`);
+    toastr?.success?.(`已将 ${nums.length} 层填入总结范围`);
+  };
+
   const getContextSlice = (centerFloor, radius = 2) => {
     const out = [];
     const start = Math.max(0, centerFloor - radius);
@@ -690,8 +736,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     const mx=chat.length;
     _ctxT=Math.max(0,focus-1-8); _ctxB=Math.min(mx-1,focus-1+8);
     const ls=_ctxS(_ctxT,_ctxB);
-    $('mp_bctx').innerHTML=`<div style="position:sticky;top:0;z-index:2;background:inherit;padding:8px 0 6px;border-bottom:1px solid rgba(255,255,255,0.06)"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div><button class="btn" id="mp_bctx_back" style="padding:5px 14px;font-size:12px">← 返回搜索结果</button></div><div class="ht">焦点 #${h(String(focus))} ｜ 已勾选：${h(pt)}</div></div></div><div id="_csa">`+ls.map(l=>_ctxH(l)).join('')+'</div>';
+    $('mp_bctx').innerHTML=`<div style="position:sticky;top:0;z-index:2;background:#f8f6fb;padding:8px 0 7px;border-bottom:1px solid #ddd7e5"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><button class="btn" id="mp_bctx_back" style="padding:5px 12px;font-size:12px">← 返回搜索结果</button><button class="btn bp1" id="mp_bctx_apply" style="padding:5px 12px;font-size:12px">使用已选楼层</button></div><div class="ht" style="margin-top:6px">焦点 #${h(String(focus))} ｜ 已选择：<span id="mp_bctx_picked">${h(pt)}</span><br>先显示前后各 8 层；上下滑动可继续加载更多。</div></div><div id="_csa">`+ls.map(l=>_ctxH(l)).join('')+'</div>';
     $('mp_bctx_back')?.addEventListener('click',showSearchView);
+    $('mp_bctx_apply')?.addEventListener('click',applyPickedFloors);
     _bindCk();
     setTimeout(()=>{const e=$('mp_bctx')?.querySelector('.hit');if(e)e.scrollIntoView({block:'center',behavior:'instant'});},30);
     _ctxBusy=false;$('mp_bctx')?.removeEventListener('scroll',_onScr);$('mp_bctx')?.addEventListener('scroll',_onScr);
@@ -703,7 +750,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     if(el.scrollTop<60&&_ctxT>0){_ctxBusy=true;const ot=_ctxT;_ctxT=Math.max(0,_ctxT-ch);const nl=_ctxS(_ctxT,ot-1);if(nl.length){const a=$('_csa');if(a){const oh=a.scrollHeight;a.insertAdjacentHTML('afterbegin',nl.map(_ctxH).join(''));el.scrollTop+=a.scrollHeight-oh;_bindCk();}}setTimeout(()=>{_ctxBusy=false;},100);}
     if(el.scrollTop+el.clientHeight>el.scrollHeight-60&&_ctxB<mx-1){_ctxBusy=true;const ob=_ctxB;_ctxB=Math.min(mx-1,_ctxB+ch);const nl=_ctxS(ob+1,_ctxB);if(nl.length){const a=$('_csa');if(a){a.insertAdjacentHTML('beforeend',nl.map(_ctxH).join(''));_bindCk();}}setTimeout(()=>{_ctxBusy=false;},100);}
   };
-  const _bindCk=()=>{$('mp_bctx')?.querySelectorAll('._ck').forEach(el=>{if(el._b)return;el._b=true;el.onchange=()=>{const n=Number(el.getAttribute('data-floor'));if(!Number.isFinite(n))return;if(el.checked)searchPicked.add(n);else searchPicked.delete(n);$('mp_bk_status').textContent=`已勾选 ${searchPicked.size} 层用于批量分析。`;};});};
+  const _bindCk=()=>{$('mp_bctx')?.querySelectorAll('._ck').forEach(el=>{if(el._b)return;el._b=true;el.onchange=()=>{const n=Number(el.getAttribute('data-floor'));if(!Number.isFinite(n))return;if(el.checked)searchPicked.add(n);else searchPicked.delete(n);const picked=$('mp_bctx_picked');if(picked)picked.textContent=searchPicked.size?compressNums([...searchPicked]):'未选择';updateSearchStatus();};});};
 
   // 扩展版 getContextSlice: 直接给起止索引
   
@@ -716,20 +763,19 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   
 
-  // Range slider 不再需要，但保留兼容
+  // 搜索结果可进入附近楼层视图继续选择。
   const renderSearchContext = (focusFloor = null) => {
     if (focusFloor) showContextView(focusFloor);
   };
 
   const renderSearchResults = (results) => {
     lastSearchResults = Array.isArray(results) ? results : [];
-    if (!lastSearchResults.length) { $('mp_bkr').innerHTML = '<div class="ht">未找到</div>'; $('mp_bk_status').textContent = ''; return; }
+    if (!lastSearchResults.length) { $('mp_bkr').innerHTML = '<div class="ht">未找到匹配楼层</div>'; updateSearchStatus(); return; }
     showSearchView();
-    const nums = lastSearchResults.map(r => r.floor + 1);
-    $('mp_bkr').innerHTML = `<div class="ht" style="margin-bottom:5px">找到 ${lastSearchResults.length} 层 <button class="btn" style="padding:2px 6px;font-size:10px" onclick="document.getElementById('mp_bf').value='${nums.join(',')}';"> 全部填入楼层框</button></div>` + lastSearchResults.map((r,ri) => { const floor=r.floor+1; const checked=searchPicked.has(floor); const fullText=String(chat[r.floor]?.mes||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); const short=h(r.preview); return `<div class="sr"><div style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" class="mp_bpick" data-floor="${floor}" ${checked?'checked':''}><div style="flex:1"><div><span class="sf">#${floor}</span> <span class="sp">[${h(r.speaker)}] 匹配:${r.matchedKw.map(k=>'<mark>'+h(k)+'</mark>').join(' ')}</span> <button class="btn" style="padding:2px 6px;font-size:10px" data-view="${floor}">上下文</button> <button class="btn _sr_toggle" style="padding:2px 6px;font-size:10px" data-ri="${ri}">展开</button></div><div class="stx _sr_short" id="sr_s${ri}">${short}</div><div class="stx _sr_full" id="sr_f${ri}" style="display:none;white-space:pre-wrap">${fullText}</div></div></div></div>`; }).join('');
+    $('mp_bkr').innerHTML = lastSearchResults.map((r,ri) => { const floor=r.floor+1; const checked=searchPicked.has(floor); const fullText=String(chat[r.floor]?.mes||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); const short=h(r.preview); return `<div class="sr"><div style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" class="mp_bpick" data-floor="${floor}" ${checked?'checked':''} aria-label="选择第 ${floor} 层"><div style="flex:1"><div><span class="sf">#${floor}</span> <span class="sp">[${h(r.speaker)}] 匹配:${r.matchedKw.map(k=>'<mark>'+h(k)+'</mark>').join(' ')}</span> <button class="btn" style="padding:2px 6px;font-size:10px" data-view="${floor}">查看前后楼层</button> <button class="btn _sr_toggle" style="padding:2px 6px;font-size:10px" data-ri="${ri}">展开</button></div><div class="stx _sr_short" id="sr_s${ri}">${short}</div><div class="stx _sr_full" id="sr_f${ri}" style="display:none;white-space:pre-wrap">${fullText}</div></div></div></div>`; }).join('');
     $('mp_bkr').querySelectorAll('._sr_toggle').forEach(el=>{el.onclick=()=>{const ri=el.getAttribute('data-ri');const s=$('sr_s'+ri);const f=$('sr_f'+ri);if(f.style.display==='none'){f.style.display='';s.style.display='none';el.textContent='收起';}else{f.style.display='none';s.style.display='';el.textContent='展开';}};});
-    $('mp_bk_status').textContent = `已勾选 ${searchPicked.size} 层用于批量分析。`;
-    $('mp_bkr').querySelectorAll('.mp_bpick').forEach(el=>{el.onchange=()=>{const n=Number(el.getAttribute('data-floor'));if(!Number.isFinite(n))return;if(el.checked)searchPicked.add(n);else searchPicked.delete(n);$('mp_bk_status').textContent=`已勾选 ${searchPicked.size} 层用于批量分析。`;};});
+    updateSearchStatus();
+    $('mp_bkr').querySelectorAll('.mp_bpick').forEach(el=>{el.onchange=()=>{const n=Number(el.getAttribute('data-floor'));if(!Number.isFinite(n))return;if(el.checked)searchPicked.add(n);else searchPicked.delete(n);updateSearchStatus();};});
     $('mp_bkr').querySelectorAll('[data-view]').forEach(el=>{el.onclick=()=>showContextView(Number(el.getAttribute('data-view')));});
   };
 
@@ -907,7 +953,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     for(const mem of list){
       if(!mem) continue;
       if(mem.priority==='high'){
-        pinned.push({...mem,_reason:'置顶'});
+        pinned.push({...mem,_reason:'常驻记忆'});
         continue;
       }
 
@@ -948,8 +994,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       if (primaryMatch.exact.length) reasons.push('主关键词硬命中: ' + primaryMatch.exact.join(', '));
       if (primaryMatch.weak.length) reasons.push('主关键词弱匹配: ' + primaryMatch.weak.join(', '));
       if (secondaryKws.length) {
-        if (secondaryMatch.exact.length) reasons.push('门控关键词硬命中: ' + secondaryMatch.exact.join(', '));
-        if (secondaryMatch.weak.length) reasons.push('门控关键词弱匹配: ' + secondaryMatch.weak.join(', '));
+        if (secondaryMatch.exact.length) reasons.push('辅助关键词硬命中: ' + secondaryMatch.exact.join(', '));
+        if (secondaryMatch.weak.length) reasons.push('辅助关键词弱匹配: ' + secondaryMatch.weak.join(', '));
       }
 
       primary.push({
@@ -1143,6 +1189,12 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   let _listScrollY=0;
   let _editUndo=null;
   const xbEvents=loadXb();
+  let animaState = await loadCurrentAnimaSummaries({ context: ctx });
+  let animaSummaries = Array.isArray(animaState?.items) ? animaState.items : [];
+  let horaeState = await loadCurrentHoraeMemories({ context: ctx });
+  let horaeMemories = Array.isArray(horaeState?.items) ? horaeState.items : [];
+
+  const isRebuildableMemory = (memory) => memory?.source === 'xb_event' || memory?.source === 'anima_summary' || memory?.source === 'horae_memory';
 
   const opLocks = new Set();
   const withLock = async (key, fn) => {
@@ -1234,20 +1286,16 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   // ===== Style =====
   const st=document.createElement('style');st.id=S;
   st.textContent=`
-    #${P}{position:fixed!important;inset:0!important;z-index:10001;display:grid!important;place-items:center!important;width:100vw!important;height:100vh!important;height:100dvh!important;margin:0!important;padding:max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)) 10px;box-sizing:border-box!important;overflow:hidden!important;transform:none!important;font-family:-apple-system,sans-serif;isolation:isolate}
+    #${P}{position:fixed;inset:0;z-index:10001;display:flex;align-items:flex-start;justify-content:center;padding:max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)) 10px;box-sizing:border-box;font-family:-apple-system,sans-serif}
     #${P} .mask{position:absolute;inset:0;background:rgba(0,0,0,0.55);backdrop-filter:blur(5px)}
-    #${P} .mp-dialog-card{position:relative!important;inset:auto!important;float:none!important;width:100%!important;max-width:960px!important;height:100%!important;max-height:100%!important;margin:0!important;transform:none!important;box-sizing:border-box!important;background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);display:flex!important;flex-direction:column!important;overflow:hidden!important;box-shadow:0 16px 50px rgba(0,0,0,0.5)}
+    #${P} .card{position:relative;width:100%;max-width:960px;max-height:calc(100dvh - max(20px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,0.5)}
     #${P} .hd{padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0}
     #${P} .hd h3{margin:0;color:#fff;font-size:16px}
     #${P} .hdactions{display:flex;align-items:center;gap:4px}
-    #${P} .helpbtn{width:28px;height:28px;border:0;border-radius:50%;background:none;color:#888;font-size:17px;cursor:pointer}
-    #${P} .helpbtn:hover{background:rgba(255,255,255,.1);color:#fff}
+    #${P} .helpbtn{background:none;border:none;color:#888;font-size:17px;cursor:pointer;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:50%}
+    #${P} .helpbtn:hover{background:rgba(255,255,255,0.1);color:#fff}
     #${P} .cls{background:none;border:none;color:#888;font-size:22px;cursor:pointer;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:50%}
     #${P} .cls:hover{background:rgba(255,255,255,0.1);color:#fff}
-    #${P} .hubnav{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px 12px;background:rgba(0,0,0,.25);border-bottom:1px solid rgba(255,255,255,.08);flex-shrink:0}
-    #${P} .hubtab{min-height:36px;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:rgba(255,255,255,.03);color:#aaa;font-size:12px;font-weight:600;cursor:pointer}
-    #${P} .hubtab:hover{background:rgba(255,255,255,.08);color:#fff}
-    #${P} .hubtab.on{background:rgba(124,107,240,.2);border-color:rgba(124,107,240,.45);color:#c4b5fd}
     #${P} .tabs{display:flex;gap:4px;padding:7px 12px;background:rgba(0,0,0,0.25);flex-wrap:wrap;flex-shrink:0}
     #${P} .ftab{padding:6px 11px;border-radius:7px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:#aaa;cursor:pointer;font-size:11px;white-space:nowrap}
     #${P} .ftab:hover{background:rgba(255,255,255,0.05);color:#fff}
@@ -1255,7 +1303,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     #${P} .tab{padding:6px 11px;border-radius:7px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:#aaa;cursor:pointer;font-size:11px;white-space:nowrap}
     #${P} .tab:hover{background:rgba(255,255,255,0.05);color:#fff}
     #${P} .tab.on{background:rgba(124,107,240,0.15);color:#7c6bf0;border-color:rgba(124,107,240,0.4)}
-    #${P} .bd{flex:1 1 0;overflow-x:hidden;overflow-y:auto;padding:12px 16px calc(96px + env(safe-area-inset-bottom, 0px));min-width:0;min-height:0;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom, 0px))}
+    #${P} .bd{flex:1;overflow-y:auto;padding:12px 16px calc(96px + env(safe-area-inset-bottom, 0px));min-height:0;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom, 0px))}
     #${P} .pg{display:none} #${P} .pg.on{display:block}
     #${P} .sts{display:flex;gap:8px;margin-bottom:12px}
     #${P} .st{flex:1;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 6px;text-align:center}
@@ -1277,6 +1325,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     #${P} .btn{padding:5px 11px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:#ddd;font-size:11px;cursor:pointer;white-space:nowrap}
     #${P} .btn:hover{background:rgba(255,255,255,0.1);color:#fff}
     #${P} .btn:disabled{opacity:0.35;cursor:default}
+    #${P} .xi .btn[aria-current="true"]{opacity:1;cursor:default}
     #${P} .bp1{background:rgba(124,107,240,0.2);border-color:rgba(124,107,240,0.4);color:#a5b4fc}
     #${P} .bp1:hover{background:rgba(124,107,240,0.3)}
     #${P} .bd1{border-color:rgba(248,113,113,0.3);color:#f87171}
@@ -1313,15 +1362,27 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     #${P} .guide.on{display:flex}
     #${P} .guidebox{position:relative;z-index:1;width:min(560px,100%);max-height:min(76dvh,620px);overflow:auto;background:#24252a;border:1px solid rgba(255,255,255,0.12);border-radius:12px;box-shadow:0 20px 70px rgba(0,0,0,0.55);padding:16px}
     #${P} .guidebox h4{margin:0 0 10px;color:#fff;font-size:15px}
-    #${P} .guidebox ol{margin:0;padding-left:18px;color:#ddd;font-size:12px;line-height:1.6}
-    #${P} .guidebox li{margin-bottom:8px}
+    #${P} .guideintro{margin:0 0 10px;color:#777;font-size:11px;line-height:1.6}
+    #${P} .guidesteps{display:grid;gap:8px}
+    #${P} .guidestep{padding:10px 11px;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:rgba(255,255,255,.025)}
+    #${P} .guidestephead{display:flex;align-items:center;gap:7px;flex-wrap:wrap;color:#fff;font-size:12px}
+    #${P} .guidestep p{margin:5px 0 0;color:#bbb;font-size:11px;line-height:1.6}
+    #${P} .guidetag{padding:2px 6px;border-radius:5px;background:rgba(124,107,240,.18);color:#c4b5fd;font-size:9px}
+    #${P} .guideinject{margin-top:7px}
+    #${P} .guideinject summary{cursor:pointer;color:#a5b4fc;font-size:11px}
+    #${P} .guideinject ul{margin:7px 0;padding-left:18px;color:#bbb;font-size:11px;line-height:1.6}
+    #${P} .guideprompt{display:block;width:100%;height:190px;box-sizing:border-box;padding:9px;margin-top:7px;resize:vertical;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(0,0,0,.25);color:#eee;font-family:inherit;font-size:11px;line-height:1.55}
+    #${P} .guidebranches{display:grid;gap:6px;margin-top:7px}
+    #${P} .guidebranch{padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:7px;color:#bbb;font-size:11px;line-height:1.55}
+    #${P} .guidebranch b{color:#ddd}
+    #${P} .guidenote{padding:9px 10px;border-radius:8px;background:rgba(124,107,240,.08);color:#aaa;font-size:11px;line-height:1.6}
     #${P} .guidebox .gbar{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px}
     #${P} .me.jump{cursor:pointer;color:#c4b5fd}
     #${P} .me.jump:hover{text-decoration:underline;color:#fff}
     #${P} .guidebox .stepgo{margin-left:6px;padding:2px 7px;font-size:10px}
     @media(max-width:760px){
       #${P}{padding:max(6px, env(safe-area-inset-top)) 6px max(6px, env(safe-area-inset-bottom)) 6px}
-      #${P} .mp-dialog-card{max-width:100%!important;border-radius:10px}
+      #${P} .card{max-width:100%;max-height:calc(100dvh - max(12px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));border-radius:10px}
       #${P} .hd{padding:9px 12px}
       #${P} .tabs{padding:6px 8px;gap:4px}
       #${P} .tab{padding:5px 8px;font-size:10px}
@@ -1336,53 +1397,187 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     }
     @media(max-width:480px){
       #${P}{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0}
-      #${P} .mp-dialog-card{border-radius:0;border-left:none;border-right:none}
+      #${P} .card{border-radius:0;max-height:100dvh;border-left:none;border-right:none}
       #${P} .hd{padding:8px 10px}
       #${P} .tabs{padding:5px 6px}
       #${P} .bd{padding:8px 10px calc(120px + env(safe-area-inset-bottom, 0px));scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom, 0px))}
       #${P} .tab{flex:1 1 calc(50% - 4px);text-align:center}
       #${P} .mh{flex-direction:column}
       #${P} .bp{align-self:flex-start}
+      #${P} .batchactions .btn{flex:1 1 calc(50% - 4px)}
+      #${P} .mergesetup{padding:11px}
+      #${P} .mergebar{align-items:stretch}
+      #${P} .kwmode{width:100%}
+      #${P} .kwmodebtn{flex:1}
     }
-  ` + (selectedTheme === 'light' ? `
-    /* ===== MemoryPilot Day — shared light surface ===== */
-    #${P}{color:#352f3c;color-scheme:light}
+    /* ===== MemoryPilot Day — warm white + mist purple ===== */
+    #${P}{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#352f3c}
     #${P} .mask{background:rgba(55,48,63,.22);backdrop-filter:blur(3px)}
-    #${P} .mp-dialog-card{background:#f8f6fb;border-color:#ddd7e5;box-shadow:0 18px 54px rgba(63,51,76,.18)}
-    #${P} .hd{border-color:#e8e3ed;background:#fff}
-    #${P} .hd h3{color:#302a37}
-    #${P} .hubnav{background:#fff;border-color:#e8e3ed}
-    #${P} .hubtab{background:#faf9fb;border-color:#ded8e6;color:#625a6b}
-    #${P} .hubtab:hover{background:#f1edf6;color:#3e3547}
-    #${P} .hubtab.on{background:#ebe5f4;border-color:#b7a8cb;color:#675181}
-    #${P} .helpbtn{color:#756d7e}
-    #${P} .helpbtn:hover{background:#f0ecf5;color:#3f3748}
+    #${P} .card{background:#f8f6fb;border-color:#ddd7e5;box-shadow:0 18px 54px rgba(63,51,76,.18)}
+    #${P} .hd{background:#fff;border-color:#e8e3ed;padding:13px 18px}
+    #${P} .hd h3{color:#302a37;font-size:18px;letter-spacing:.01em}
     #${P} .cls{color:#756d7e}
     #${P} .cls:hover{background:#f0ecf5;color:#3f3748}
-    #${P} .tabs{background:#fff;border-bottom:1px solid #e8e3ed}
-    #${P} .tab,#${P} .ftab{background:#faf9fb;border-color:#ded8e6;color:#625a6b}
-    #${P} .tab:hover,#${P} .ftab:hover{background:#f1edf6;color:#3e3547}
-    #${P} .tab.on,#${P} .ftab.on{background:#ebe5f4;border-color:#b7a8cb;color:#675181}
-    #${P} .st,#${P} .mi,#${P} .xi,#${P} .rc{background:#fff;border-color:#e1dce7}
-    #${P} .st b,#${P} .me{color:#302a37}
-    #${P} .st small,#${P} .ht,#${P} .emp,#${P} .fg label{color:#766e7e}
-    #${P} .ms,#${P} .sr .stx{color:#494151}
-    #${P} .btn{background:#fff;border-color:#d8d2df;color:#504858}
+    #${P} .helpbtn{color:#756d7e}
+    #${P} .helpbtn:hover{background:#f0ecf5;color:#3f3748}
+    #${P} .hubnav{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px 12px;background:#fff;border-bottom:1px solid #e8e3ed}
+    #${P} .hubtab{min-height:38px;border:1px solid #ded8e6;border-radius:10px;background:#faf9fb;color:#625a6b;font-size:12px;font-weight:600;cursor:pointer}
+    #${P} .hubtab:hover{background:#f1edf6;border-color:#c9bfd8}
+    #${P} .hubtab.on{background:#ebe5f4;border-color:#b7a8cb;color:#675181;box-shadow:inset 0 0 0 1px rgba(126,102,155,.08)}
+    #${P} .tabs{flex-wrap:nowrap;overflow-x:auto;padding:8px 12px;background:#f4f1f7;border-bottom:1px solid #e3dfe8;scrollbar-width:none}
+    #${P} .tabs::-webkit-scrollbar{display:none}
+    #${P} .tab,#${P} .ftab{background:#fff;border-color:#ddd7e5;color:#665e6f;padding:7px 12px}
+    #${P} .tab:hover,#${P} .ftab:hover{background:#f0ebf5;color:#4f405f}
+    #${P} .tab.on,#${P} .ftab.on{background:#e9e1f2;color:#694f85;border-color:#b9a7cd}
+    #${P} .bd{background:#f8f6fb;padding-top:14px}
+    #${P} .st,#${P} .mi,#${P} .xi,#${P} .sr,#${P} .rc,#${P} .det{background:#fff;border-color:#e1dce7;box-shadow:0 2px 8px rgba(66,54,78,.035)}
+    #${P} .mi:hover,#${P} .xi:hover{border-color:#bdaeCA}
+    #${P} .st b,#${P} .me,#${P} .guidebox h4{color:#312a38}
+    #${P} .st small,#${P} .ht,#${P} .sr .sp,#${P} .rc .rl{color:#7a7283}
+    #${P} .ms,#${P} .sr,#${P} .sr .stx,#${P} .det summary{color:#514a59}
+    #${P} .xt,#${P} .me.jump{color:#6d5488}
+    #${P} .me.jump:hover{color:#4e3966}
+    #${P} .kw{background:#eee7f6;color:#694f85}
+    #${P} .kx{background:#f0e8f6;color:#75518c}
+    #${P} .ke{background:#e7eef9;color:#42648c}
+    #${P} .bph{background:#fbe9ea;color:#a84450}
+    #${P} .bpm{background:#fff2d8;color:#8c6419}
+    #${P} .bpl{background:#e7f4ea;color:#3f7450}
+    #${P} .bpi{background:#eeebf1;color:#69616f}
+    #${P} .btn{background:#fff;border-color:#d8d2df;color:#504858;box-shadow:none}
     #${P} .btn:hover{background:#f0ecf4;color:#3e3547}
-    #${P} .fg input,#${P} .fg textarea,#${P} .fg select{background:#fff;color:#342e3a;border-color:#d9d3e0}
-    #${P} .det{border-color:#e1dce7}
-    #${P} .det summary{color:#665e6f}
-    #${P} .sr{background:#faf8fc;border-color:#e3dde9;color:#494151}
-    #${P} .guidebox{background:#fff;border-color:#ddd7e5;box-shadow:0 20px 70px rgba(63,51,76,.2)}
-    #${P} .guidebox h4,#${P} .guidebox ol{color:#302a37}
-  ` : '');
+    #${P} .bp1{background:#e9e1f2;border-color:#b9a7cd;color:#674f80}
+    #${P} .bp1:hover{background:#ded2eb;color:#533b6d}
+    #${P} .bd1{background:#fff7f7;border-color:#e7b9bd;color:#a7464f}
+    #${P} .bd1:hover{background:#f9e4e6;color:#923a43}
+    #${P} .fg label,#${P} label{color:#5d5565!important}
+    #${P} .fg input,#${P} .fg textarea,#${P} .fg select,#${P} #mp_merge_kw_mode,#${P} #mp_f_search{background:#fff!important;color:#342e3a!important;border-color:#d9d3e0!important;box-shadow:none!important}
+    #${P} .fg input:focus,#${P} .fg textarea:focus,#${P} .fg select:focus,#${P} #mp_f_search:focus{border-color:#9e88b8!important;box-shadow:0 0 0 3px rgba(126,102,155,.12)!important}
+    #${P} input[type="checkbox"]{-webkit-appearance:none!important;appearance:none!important;display:grid!important;place-content:center;width:18px!important;min-width:18px!important;height:18px!important;flex:0 0 18px;padding:0!important;margin:0!important;border:2px solid #a99ab8!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;opacity:1!important;color-scheme:light;cursor:pointer}
+    #${P} input[type="checkbox"]:checked{border-color:#80679b!important;background:#80679b!important}
+    #${P} input[type="checkbox"]:checked::after{content:"✓";color:#fff;font-size:13px;font-weight:800;line-height:1}
+    #${P} input[type="checkbox"]:focus-visible{outline:3px solid rgba(126,102,155,.2);outline-offset:2px}
+    #${P} .mp-check{display:flex;align-items:center;gap:8px;min-height:30px;color:#5d5565!important;cursor:pointer;user-select:none}
+    #${P} .searchtools{position:sticky;top:0;z-index:4;margin:0 0 10px;padding:9px;background:#f8f6fb;border:1px solid #ddd7e5;border-radius:10px;box-shadow:0 5px 14px rgba(66,54,78,.08)}
+    #${P} .searchtools .opline{margin:0 0 7px;color:#625a6b}
+    #${P} .searchactions{display:flex;gap:6px;flex-wrap:wrap}
+    #${P} .searchactions .btn{flex:1 1 auto}
+    #${P} .memoryhelp{margin:0 0 12px}
+    #${P} .memoryfilter{margin:0 0 12px;background:#fff;border:1px solid #d9d1e2;border-radius:11px;box-shadow:0 2px 8px rgba(66,54,78,.035);overflow:hidden}
+    #${P} .memoryhelp>summary{padding:5px 3px;cursor:pointer;color:#624c78;font-size:12px;font-weight:700;list-style:none}
+    #${P} .memoryfilter>summary{padding:11px 13px;cursor:pointer;color:#624c78;font-size:12px;font-weight:700;list-style:none}
+    #${P} .memoryhelp>summary::-webkit-details-marker,#${P} .memoryfilter>summary::-webkit-details-marker{display:none}
+    #${P} .memoryhelp>summary::before,#${P} .memoryfilter>summary::before{content:"▸";display:inline-block;margin-right:6px;color:#80679b;transition:transform .15s ease}
+    #${P} .memoryhelp[open]>summary::before,#${P} .memoryfilter[open]>summary::before{transform:rotate(90deg)}
+    #${P} .memoryhelpbody{margin-top:7px;padding:11px 13px;background:#fff;border:1px solid #d9d1e2;border-radius:11px;box-shadow:0 2px 8px rgba(66,54,78,.035);color:#554c5e;font-size:11px;line-height:1.65}
+    #${P} .memoryfilterbody{padding:0 13px 12px;border-top:1px solid #ece7f0;color:#554c5e;font-size:11px;line-height:1.65}
+    #${P} .memoryhelpbody h5{margin:10px 0 3px;color:#4b3b59;font-size:11px}
+    #${P} .memoryhelpbody h5:first-child{margin-top:0}
+    #${P} .memoryhelpbody ol,#${P} .memoryhelpbody ul{margin:3px 0;padding-left:20px}
+    #${P} .memoryhelpbody p{margin:5px 0}
+    #${P} .memoryhelpsection{padding:2px 0 7px}
+    #${P} .memoryhelpsection+.memoryhelpsection{margin-top:12px;padding-top:13px;border-top:1px solid #e4ddea}
+    #${P} .memoryhelpsection h5{display:flex;align-items:center;gap:8px;margin:0 0 9px;padding:7px 9px;border-radius:8px;background:#f1ebf6;color:#4f3d61;font-size:12px}
+    #${P} .memoryhelpnum{display:grid;place-items:center;width:21px;height:21px;flex:0 0 21px;border-radius:50%;background:#80679b;color:#fff;font-size:11px;font-weight:700}
+    #${P} .memoryhelpsection p{padding-left:9px;margin:7px 0 9px}
+    #${P} .memoryhelpsection p>b{display:inline-block;margin-bottom:2px;color:#4b3b59}
+    #${P} .filterchoices{display:grid;grid-template-columns:1fr;gap:6px;margin-top:8px}
+    #${P} .filterchoices .btn{width:100%}
+    #${P} .filtersearch{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;margin-top:10px}
+    #${P} .filtersearch input{width:100%;padding:7px 9px;border-radius:7px;border:1px solid #d9d3e0;background:#fff;color:#342e3a;font-size:11px;box-sizing:border-box}
+    #${P} .filtersearch .btn{min-width:74px}
+    #${P} .mp-pick-wrap{display:none}
+    #${P}.multi-select-on .mp-pick-wrap{display:flex}
+    #${P} .batchactions{display:grid;grid-template-columns:1fr;gap:6px;margin-top:9px}
+    #${P} .batchactions .btn{width:100%}
+    #${P} .sourceactions{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 9px}
+    #${P} .sourceactions .btn{flex:1 1 150px}
+    #${P} .sourcestatus{margin:0 0 9px;padding:9px 10px;border:1px solid #ddd7e5;border-radius:9px;background:#faf9fb;color:#625a6b;font-size:11px;line-height:1.55}
+    #${P} .mergesetup{display:none;margin-bottom:9px;padding:12px 13px;background:#fff;border:1px solid #cdbfda;border-radius:11px;box-shadow:0 3px 10px rgba(66,54,78,.05)}
+    #${P} .mergesetup.on{display:block}
+    #${P} .mergesetuptitle{font-size:12px;font-weight:700;color:#544061;margin-bottom:8px}
+    #${P} .mergebar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:7px}
+    #${P} .kwmode{display:flex;border:1px solid #cbbdd9;border-radius:8px;overflow:hidden;background:#fff}
+    #${P} .kwmodebtn{padding:6px 10px;border:0;border-right:1px solid #ddd3e6;background:#fff;color:#665e6f;font-size:11px;cursor:pointer}
+    #${P} .kwmodebtn:last-child{border-right:0}
+    #${P} .kwmodebtn.on{background:#e9e1f2;color:#634b7c;font-weight:700}
+    #${P} .mergeactions{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+    #${P} .mergeactions .btn{flex:1}
+    #${P} .advancedprompts{margin:0 0 9px}
+    #${P} .advancedprompts>summary{font-size:12px;font-weight:700;color:#624c78}
+    #${P} .promptcard{margin-top:10px;padding:3px 0 0;background:transparent;border:0;border-radius:0}
+    #${P} .promptcard+.promptcard{margin-top:16px;padding-top:16px;border-top:1px solid #e2dce8}
+    #${P} .prompttitle{margin:0 0 7px;font-size:12px;font-weight:700;color:#43384d}
+    #${P} .prompteditor{display:block;width:100%;height:220px;padding:10px 11px;box-sizing:border-box;resize:vertical;overflow:auto;background:#fff!important;color:#342e3a!important;border:1px solid #cfc5d8!important;border-radius:9px;font-family:inherit;font-size:11px;line-height:1.65;box-shadow:inset 0 1px 2px rgba(61,49,72,.04)!important}
+    #${P} .prompteditor:focus{outline:0;border-color:#9e88b8!important;box-shadow:0 0 0 3px rgba(126,102,155,.12)!important}
+    #${P} .promptbuttons{display:flex;gap:6px;margin-top:7px}
+    #${P} .promptnote{margin-top:7px;color:#756d7d;font-size:11px;line-height:1.65}
+    #${P} .st{cursor:pointer;font-family:inherit}
+    #${P} .st.on{background:#e9e1f2;border-color:#b9a7cd;box-shadow:inset 0 0 0 1px rgba(126,102,155,.08)}
+    #${P} .st.on b,#${P} .st.on small{color:#654d7f}
+    #${P} .sr ._sr_full{height:220px;overflow-y:auto;overscroll-behavior:contain;margin-top:7px!important;padding:9px 10px;background:#f8f6fb;border:1px solid #ddd7e5;border-radius:8px;box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#c9bfd2 transparent}
+    #${P} .sr ._sr_full::-webkit-scrollbar{width:6px}
+    #${P} .sr ._sr_full::-webkit-scrollbar-thumb{background:#c9bfd2;border-radius:4px}
+    #${P} .emp{color:#827a89}
+    #${P} .badge{background:#e8e0f1;color:#654d7f}
+    #${P} .undo{background:#fff4dc;border-color:#e8cd93;color:#805d1d}
+    #${P} .cfgsubnav{display:flex;gap:6px;overflow-x:auto;margin:0 0 14px;padding-bottom:2px;scrollbar-width:none}
+    #${P} .cfgsubnav::-webkit-scrollbar{display:none}
+    #${P} .cfgsubtab{flex:0 0 auto;padding:7px 12px;border:1px solid #ddd7e5;border-radius:8px;background:#fff;color:#665e6f;font-size:11px;cursor:pointer}
+    #${P} .cfgsubtab.on{background:#e9e1f2;color:#694f85;border-color:#b9a7cd}
+    #${P} .cfgsection{display:none}
+    #${P} .cfgsection.on{display:block}
+    #${P} .cfgcard{background:#fff;border:1px solid #e1dce7;border-radius:12px;padding:13px;margin-bottom:12px}
+    #${P} .cfgtitle{font-size:13px;font-weight:700;color:#413847;margin-bottom:10px}
+    #${P} .cleaneditor{display:block;width:100%;padding:10px 11px!important;box-sizing:border-box;resize:vertical;background:#fff!important;color:#342e3a!important;border:1px solid #cfc5d8!important;border-radius:9px!important;font-family:inherit;font-size:12px!important;line-height:1.55;box-shadow:inset 0 1px 2px rgba(61,49,72,.04)!important}
+    #${P} .cleaneditor:focus{outline:0;border-color:#9e88b8!important;box-shadow:0 0 0 3px rgba(126,102,155,.12)!important}
+    #${P} .cleanupresult{padding:10px 11px;margin:8px 0;border:1px solid #ddd7e5;border-radius:9px;background:#faf9fb;color:#625a6b;font-size:11px;line-height:1.55}
+    #${P} .autosummary{margin:0 0 14px;padding:13px;background:#fff;border:1px solid #d9d1e2;border-radius:12px;box-shadow:0 2px 8px rgba(66,54,78,.035)}
+    #${P} .autosummaryhead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px}
+    #${P} .autosummarytitle{font-size:13px;font-weight:700;color:#413847}
+    #${P} .autosummarygrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+    #${P} .autosummary .fg input,#${P} .autosummary .fg select,#${P} .cfgcard .fg input:not([type="checkbox"]),#${P} .cfgcard .fg select{display:block;width:100%!important;min-height:40px!important;margin-top:5px!important;padding:8px 10px!important;box-sizing:border-box!important;border:1px solid #d9d3e0!important;border-radius:9px!important;background:#fff!important;color:#342e3a!important;font:inherit!important;line-height:1.35!important;box-shadow:none!important;opacity:1!important}
+    #${P} .autosummary .fg select,#${P} .cfgcard .fg select{-webkit-appearance:auto!important;appearance:auto!important}
+    #${P} .autosummary .fg input:focus,#${P} .autosummary .fg select:focus,#${P} .cfgcard .fg input:not([type="checkbox"]):focus,#${P} .cfgcard .fg select:focus{outline:0!important;border-color:#9e88b8!important;box-shadow:0 0 0 3px rgba(126,102,155,.12)!important}
+    #${P} .autosummarystatus{margin-top:11px;padding:10px 11px;border:1px solid #ddd7e5;border-radius:9px;background:#faf9fb;color:#625a6b;font-size:11px;line-height:1.6}
+    #${P} .autosummarystatus.err{border-color:#e7b9bd;background:#fff7f7;color:#a7464f}
+    #${P} .autosummaryactions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+    #${P} .autosummaryactions .btn{flex:1}
+    #${P} .automanualtitle{margin:4px 0 11px;padding-top:2px;font-size:13px;font-weight:700;color:#413847}
+    #${P} .batchresultactions{margin:0 0 9px;padding:9px;background:#f8f6fb;border:1px solid #ddd7e5;border-radius:10px}
+    #${P} .batchresultactions .btn{width:100%}
+    @media(max-width:560px){#${P} .autosummarygrid{grid-template-columns:1fr}}
+    #${P} .floatnav .btn{background:#fff;color:#574d60;border-color:#d8d1df;box-shadow:0 8px 22px rgba(67,55,79,.15)}
+    #${P} .guidebox{background:#fff;border-color:#ddd6e4;box-shadow:0 20px 65px rgba(54,45,64,.2)}
+    #${P} .guideintro{color:#756d7d}
+    #${P} .guidestep{background:#faf9fb;border-color:#e2dce8}
+    #${P} .guidestephead{color:#403647}
+    #${P} .guidestep p,#${P} .guideinject ul,#${P} .guidebranch{color:#625a6b}
+    #${P} .guidetag{background:#e9e1f2;color:#674f80}
+    #${P} .guideinject summary{color:#694f85}
+    #${P} .guideprompt{background:#fff;color:#342e3a;border-color:#cfc5d8}
+    #${P} .guidebranch{background:#fff;border-color:#e1dce7}
+    #${P} .guidebranch b{color:#4b3b59}
+    #${P} .guidenote{background:#f1ebf6;color:#625a6b}
+    #${P} [style*="color:#fff"],#${P} [style*="color: #fff"],#${P} [style*="color:#ccc"]{color:#3c3544!important}
+    #${P} .sr mark{background:#fff0bf;color:#765714}
+    #${P} .mi.hit{border-color:#9e84ba;box-shadow:0 0 0 2px rgba(126,102,155,.16)}
+    @media(max-width:600px){
+      #${P} .hubnav{padding:7px 8px;gap:5px}
+      #${P} .hubtab{min-height:36px;font-size:11px}
+      #${P} .tabs{padding:7px 8px}
+      #${P} .tab{flex:0 0 auto!important;font-size:11px;padding:7px 11px}
+      #${P} .ma{flex-direction:row}
+      #${P} .ma .btn{width:auto;flex:1 1 auto}
+    }
+  `;
   document.head.appendChild(st);
 
   // ===== DOM =====
   const root=document.createElement('div');root.id=P;
   root.innerHTML=`
     <div class="mask"></div>
-    <div class="mp-dialog-card">
+    <div class="card">
       <div class="hd"><h3>MemoryPilot</h3><div class="hdactions"><button class="helpbtn" id="mp_help" aria-label="打开新手指引" title="新手指引">?</button><button class="cls" id="mp_cls" aria-label="关闭">&times;</button></div></div>
       <nav class="hubnav" aria-label="MemoryPilot 主导航">
         <button class="hubtab on" data-hub="memory">记忆管理</button>
@@ -1391,84 +1586,179 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       </nav>
       <div class="tabs">
         <button class="tab on" data-t="list">记忆列表</button>
-        <button class="tab" data-t="add">编辑</button>
-        <button class="tab" data-t="xb">XB事件 <span class="badge">${xbEvents.length}</span></button>
-        <button class="tab" data-t="batch">分析</button>
-                <button class="tab" data-t="cfg">过滤</button>
+        <button class="tab" data-t="batch">楼层总结</button>
+        <button class="tab" data-t="xb">小白X总结 <span class="badge">${xbEvents.length}</span></button>
+        <button class="tab" data-t="anima">Anima总结 <span class="badge" id="mp_anima_tab_count">${animaSummaries.length}</span></button>
+        <button class="tab" data-t="horae">Horae记忆 <span class="badge" id="mp_horae_tab_count">${horaeMemories.length}</span></button>
+        <button class="tab" data-t="add">手动添加 / 编辑</button>
       </div>
       <div class="bd">
         <div class="pg on" id="mp_pg_list">
-          <div class="sts">
-            <div class="st"><b id="mp_n1">0</b><small>总计</small></div>
-            <div class="st"><b id="mp_n2">0</b><small>置顶</small></div>
-            <div class="st"><b id="mp_n4">0</b><small>低</small></div>
-            <div class="st"><b id="mp_n3">0</b><small>XB</small></div>
-          </div>
-          <div class="fr" style="margin-bottom:8px">
-            <button class="btn" id="mp_sel_xb">全选XB</button>
-            <button class="btn" id="mp_sel_xbnr">选择未重构XB</button>
-            <button class="btn" id="mp_sel_none">清空选择</button>
-            <button class="btn" id="mp_edit_sel">编辑选中</button>
-            <button class="btn bd1" id="mp_del_sel">删除选中</button>
-            <button class="btn bp1" id="mp_rebuild_sel">批量重构关键词</button>
-          </div>
-          <div class="ht" id="mp_sel_info" style="margin-bottom:6px">已选 0 条记忆</div><div class="undo" id="mp_undo_bar"></div><div style="display:flex;gap:5px;margin-bottom:8px;flex-wrap:wrap"><button class="btn bp1" id="mp_merge_sel">合并选中事件</button><select id="mp_merge_kw_mode" style="padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);background:rgba(0,0,0,0.3);color:#ddd;font-size:11px"><option value="default">关键词：默认合并</option><option value="ai">关键词：AI重构</option></select><label style="display:flex;align-items:center;gap:4px;color:#aaa;font-size:11px;white-space:nowrap"><input type="checkbox" id="mp_merge_ctx" checked>关联原文</label></div><div class="opline" id="mp_merge_status"></div><details class="det" style="margin-bottom:8px"><summary>事件合并 Prompt（可编辑，共用分析 API）</summary><textarea id="mp_mpr" style="width:100%;min-height:120px;margin-top:6px">${h(loadMergePrompt())}</textarea><div style="display:flex;gap:5px;margin-top:5px"><button class="btn" id="mp_mps">保存</button><button class="btn bd1" id="mp_mpd">恢复默认</button></div><div class="ht" style="margin-top:6px">合并选中记忆时使用。{{memories}} 替换为记忆信息，{{context}} 替换为楼层原文。</div></details><div class="opline" id="mp_kw_status"></div>
-          <details class="det" style="margin-bottom:8px">
-            <summary>XB 关键词重构 Prompt（可编辑，共用分析 API）</summary>
-            <textarea id="mp_kpr" style="width:100%;min-height:120px;margin-top:6px">${h(loadKwPrompt())}</textarea>
-            <div style="display:flex;gap:5px;margin-top:5px">
-              <button class="btn" id="mp_kps">保存</button>
-              <button class="btn bd1" id="mp_kpd">恢复默认</button>
+          <details class="memoryhelp">
+            <summary>记忆列表使用说明</summary>
+            <div class="memoryhelpbody">
+              <section class="memoryhelpsection">
+                <h5><span class="memoryhelpnum">1</span><span>记忆来源（五选一）</span></h5>
+                <p><b>手动添加</b><br>进入“手动添加 / 编辑”填写记忆。</p>
+                <p><b>楼层总结</b><br>选择聊天楼层，由 AI 总结为候选记忆。</p>
+                <p><b>小白X总结</b><br>先在“小白X总结”页导入；然后回到记忆列表，选择“未重构小白X总结”，执行“批量重构关键词”。</p>
+                <p><b>Anima总结</b><br>先在“Anima总结”页导入；然后回到记忆列表，选择“未重构Anima总结”，执行“批量重构关键词”。</p>
+                <p><b>Horae记忆</b><br>在“Horae记忆”页导入尚未入库的原始时间线事件；Horae 后续压缩不会改动已经导入的记忆。然后回到记忆列表，选择“未重构Horae记忆”，执行“批量重构关键词”。</p>
+              </section>
+              <section class="memoryhelpsection">
+                <h5><span class="memoryhelpnum">2</span><span>召回类型</span></h5>
+                <p><b>常驻</b><br>不需要命中关键词，会持续注入记忆，类似世界书蓝灯。</p>
+                <p><b>主要触发</b><br>命中主关键词后参与召回，类似世界书绿灯。</p>
+                <p><b>次级触发</b><br>命中主关键词后参与召回，类似世界书绿灯，但优先级低于主要触发。</p>
+                <p><b>示例</b><br>本次命中 3 条常驻、5 条主要触发和 3 条次级触发。如果设置为“最多召回 5 条”，最终会注入 3 条常驻（不占名额）、4 条主要触发（优先）和 1 条次级触发（保留一个位置），共 8 条记忆。</p>
+              </section>
+              <section class="memoryhelpsection">
+                <h5><span class="memoryhelpnum">3</span><span>合并选中记忆</span></h5>
+                <p><b>概念解释</b><br>把选中的多条相关记忆合并成一条新记忆。合并前可以选择“汇总原关键词”或“重新生成关键词”。</p>
+                <p><b>合并时参考原文</b><br>把选中的记忆及其对应楼层原文一起发送给 AI，避免合并时遗漏原文细节。</p>
+              </section>
             </div>
-            <div class="ht" style="margin-top:6px">仅对记忆列表中勾选的 XB 条目生效；调用与“分析”页相同的 API 配置。</div>
           </details>
-          <div class="fr" style="margin-bottom:8px;gap:4px">
-            <button class="ftab on" data-mf="all" id="mp_f_all">全部</button>
-            <button class="ftab" data-mf="high" id="mp_f_high">置顶</button>
-            <button class="ftab" data-mf="medium" id="mp_f_med">普通</button>
-            <button class="ftab" data-mf="low" id="mp_f_low">低</button>
-            <button class="ftab" data-mf="xb_norecon" id="mp_f_xbnr">未重构XB</button>
-            <input id="mp_f_search" placeholder="搜索事件名/摘要…" style="flex:1;min-width:80px;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.3);color:#eee;font-size:11px">
+          <div class="sts">
+            <button class="st on" type="button" data-mf="all"><b id="mp_n1">0</b><small>全部</small></button>
+            <button class="st" type="button" data-mf="high"><b id="mp_n2">0</b><small>常驻</small></button>
+            <button class="st" type="button" data-mf="medium"><b id="mp_nmed">0</b><small>主要触发</small></button>
+            <button class="st" type="button" data-mf="low"><b id="mp_n4">0</b><small>次级触发</small></button>
           </div>
+          <details class="memoryfilter">
+            <summary>记忆筛选与批量操作：<span id="mp_filter_label">全部记忆</span> · <span id="mp_filter_selected">已选 0 条</span></summary>
+            <div class="memoryfilterbody">
+              <div class="filtersearch"><input id="mp_f_search" placeholder="搜索事件名/摘要…"><button class="btn" id="mp_multi_toggle" type="button" aria-pressed="false">多选</button><button class="btn" id="mp_sel_none" type="button">清空选择</button></div>
+              <div class="filterchoices">
+                <button class="btn" type="button" id="mp_select_all">选择全部记忆 <span class="badge" id="mp_nallpick">0</span></button>
+                <button class="btn" type="button" id="mp_select_xball">选择全部小白X总结 <span class="badge" id="mp_n3">0</span></button>
+                <button class="btn" type="button" id="mp_select_xbnr">选择未重构小白X总结 <span class="badge" id="mp_nxbnr">0</span></button>
+                <button class="btn" type="button" id="mp_select_animaall">选择全部Anima总结 <span class="badge" id="mp_nanima">0</span></button>
+                <button class="btn" type="button" id="mp_select_animanr">选择未重构Anima总结 <span class="badge" id="mp_nanimanr">0</span></button>
+                <button class="btn" type="button" id="mp_select_horaeall">选择全部Horae记忆 <span class="badge" id="mp_nhorae">0</span></button>
+                <button class="btn" type="button" id="mp_select_horaenr">选择未重构Horae记忆 <span class="badge" id="mp_nhoraenr">0</span></button>
+              </div>
+              <div class="batchactions" id="mp_batch_actions">
+                <button class="btn bp1" id="mp_rebuild_sel">批量重构关键词</button>
+                <button class="btn bp1" id="mp_merge_open">合并选中记忆</button>
+                <button class="btn bd1" id="mp_del_sel">删除选中记忆</button>
+              </div>
+            </div>
+          </details>
+          <div class="undo" id="mp_undo_bar"></div>
+          <div class="mergesetup" id="mp_merge_setup">
+            <div class="mergesetuptitle">合并设置</div>
+            <div class="mergebar">
+              <input type="hidden" id="mp_merge_kw_mode" value="default">
+              <span class="ht">合并记忆时，关键词如何处理？</span>
+              <div class="kwmode" role="radiogroup" aria-label="合并记忆时的关键词处理方式">
+                <button type="button" class="kwmodebtn on" data-merge-kw-mode="default" aria-pressed="true">汇总原关键词</button>
+                <button type="button" class="kwmodebtn" data-merge-kw-mode="ai" aria-pressed="false">AI 重新生成关键词</button>
+              </div>
+              <label class="mp-check"><input type="checkbox" id="mp_merge_ctx" checked>合并时参考原文</label>
+            </div>
+            <div class="mergeactions"><button class="btn bd1" id="mp_merge_setup_cancel">取消</button><button class="btn bp1" id="mp_merge_run">开始合并</button></div>
+          </div>
+          <div class="opline" id="mp_merge_status"></div>
+          <div class="opline" id="mp_kw_status"></div>
+          <details class="det advancedprompts">
+            <summary>自定义 Prompt</summary>
+            <div class="promptcard">
+              <div class="prompttitle">合并记忆 Prompt</div>
+              <textarea class="prompteditor" id="mp_mpr">${h(loadMergePrompt())}</textarea>
+              <div class="promptbuttons"><button class="btn" id="mp_mps">保存</button><button class="btn bd1" id="mp_mpd">恢复默认</button></div>
+              <div class="promptnote">用于合并选中的记忆。{{memories}} 和 {{context}} 是占位符：执行时，插件会将 {{memories}} 替换为选中的记忆信息；开启“合并时参考原文”后，会将 {{context}} 替换为对应楼层原文。</div>
+            </div>
+            <div class="promptcard">
+              <div class="prompttitle">重构关键词 Prompt</div>
+              <textarea class="prompteditor" id="mp_kpr">${h(loadKwPrompt())}</textarea>
+              <div class="promptbuttons"><button class="btn" id="mp_kps">保存</button><button class="btn bd1" id="mp_kpd">恢复默认</button></div>
+              <div class="promptnote">用于单条或批量重构小白X总结、Anima总结和Horae记忆的关键词，以及合并记忆时选择“AI 重新生成关键词”。{{event}}、{{summary}}、{{entities}}、{{timeLabel}} 和 {{floorRange}} 均为占位符，执行时会自动替换为当前记忆的信息。选择“汇总原关键词”时不会使用这段 Prompt。</div>
+            </div>
+          </details>
           <div id="mp_list"></div>
         </div>
         <div class="pg" id="mp_pg_add">
           <div class="fg"><label>事件名</label><input id="mp_fe"></div>
           <div class="fg"><label>主关键词（逗号分隔，参与召回）</label><input id="mp_fpk" placeholder="事件名,地点,物品,核心动作"></div>
-          <div class="fg"><label>门控关键词（逗号分隔，参与门控）</label><input id="mp_fsk" placeholder="冲突点,结果,态度,补充场景词"></div>
+          <div class="fg"><label>辅助关键词（逗号分隔，辅助判断语境）</label><input id="mp_fsk" placeholder="动作,场景,结果,补充语境词"></div>
           <div class="fg"><label>人物关键词（逗号分隔，仅展示不召回）</label><input id="mp_fek" placeholder="人物名"></div>
           <div class="fg"><label>时间标签</label><input id="mp_ft" placeholder="例如：UC0087/07/10 10:57 / 当晚 / 第120-138层"></div>
           <div class="fg"><label>时间值（分钟，可空）</label><input id="mp_ftv" placeholder="例如 657"></div>
           <div class="fg"><label>楼层范围（例如 120-138，可空）</label><input id="mp_ffr" placeholder="120-138"></div>
           <div class="fg"><label>自定义 α（可空，0~0.95）</label><input id="mp_fa" type="number" min="0" max="0.95" step="0.01" placeholder="为空则使用全局默认 0.72"></div>
           <div class="fg"><label>摘要</label><textarea id="mp_fs"></textarea></div>
-          <div class="fg"><label>优先级</label><select id="mp_fp"><option value="high">置顶（每轮注入）</option><option value="medium" selected>普通（关键词触发）</option><option value="low">低（保底槽位）</option></select></div>
-          <div class="ht" style="margin-bottom:10px">participants / entityKeywords 不参与 recall；timeValue 请使用 RP 故事内时间，不要写现实消息时间戳</div>
+          <div class="fg"><label>召回类型</label><select id="mp_fp"><option value="high">常驻（不需要命中关键词）</option><option value="medium" selected>主要触发（命中后优先参与）</option><option value="low">次级触发（命中后低优先参与）</option></select></div>
+          <div class="ht" style="margin-bottom:10px">人物关键词仅用于显示，不参与记忆召回。时间值是从当天 00:00 起累计的故事内分钟数，计算方式为“小时 × 60＋分钟”。例如 21:25＝21 × 60＋25＝1285。时间值当前不参与记忆召回，不确定时可以留空。</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" id="mp_fundo" style="flex:1;padding:9px;font-size:13px">撤回修改</button><button class="btn bd1" id="mp_fcancel" style="flex:1;padding:9px;font-size:13px">取消</button><button class="btn bp1" id="mp_sv" style="flex:1;padding:9px;font-size:13px">保存</button></div>
         </div>
         <div class="pg" id="mp_pg_xb">
           <div id="mp_xst"></div>
           <div class="fr">
             <input id="mp_xs" placeholder="搜索...">
-            <select id="mp_xty"><option value="">类型</option><option>相遇</option><option>冲突</option><option>揭示</option><option>抉择</option><option>羁绊</option><option>转变</option><option>收束</option><option>日常</option></select>
-            <select id="mp_xwt"><option value="">权重</option><option>核心</option><option>主线</option><option>转折</option><option>点睛</option><option>氛围</option></select>
+            <select id="mp_xty" aria-label="小白X类型"><option value="">小白X类型</option><option>相遇</option><option>冲突</option><option>揭示</option><option>抉择</option><option>羁绊</option><option>转变</option><option>收束</option><option>日常</option></select>
+            <select id="mp_xwt" aria-label="小白X权重"><option value="">小白X权重</option><option>核心</option><option>主线</option><option>转折</option><option>点睛</option><option>氛围</option></select>
+            <select id="mp_xmp" aria-label="MemoryPilot 状态"><option value="">MemoryPilot 状态</option><option value="unimported">未导入</option><option value="high">常驻</option><option value="medium">主要触发</option><option value="low">次级触发</option></select>
           </div>
           <div id="mp_xl"></div>
         </div>
+        <div class="pg" id="mp_pg_anima">
+          <div class="sourcestatus" id="mp_ast"></div>
+          <div class="fr">
+            <input id="mp_as" placeholder="搜索总结/标签…">
+            <select id="mp_amp" aria-label="MemoryPilot 状态"><option value="">全部状态</option><option value="unimported">未导入</option><option value="high">常驻</option><option value="medium">主要触发</option><option value="low">次级触发</option></select>
+          </div>
+          <div class="sourceactions"><button class="btn bp1" id="mp_anima_import_all">导入全部未导入总结</button><button class="btn" id="mp_anima_refresh">重新读取</button></div>
+          <div id="mp_al"></div>
+        </div>
+        <div class="pg" id="mp_pg_horae">
+          <div class="sourcestatus" id="mp_hst"></div>
+          <div class="fr">
+            <input id="mp_hs" placeholder="搜索记忆/地点/人物…">
+            <select id="mp_hkind" aria-label="Horae事件状态"><option value="">全部原始事件</option><option value="active">尚未压缩</option><option value="compressed">已被Horae压缩</option></select>
+            <select id="mp_hmp" aria-label="MemoryPilot 状态"><option value="">全部状态</option><option value="unimported">未导入</option><option value="high">常驻</option><option value="medium">主要触发</option><option value="low">次级触发</option></select>
+          </div>
+          <div class="sourceactions"><button class="btn bp1" id="mp_horae_import_all">导入全部未导入事件</button><button class="btn" id="mp_horae_refresh">重新读取</button></div>
+          <div class="ht" style="margin:0 0 10px">这里只读取 Horae 的原始时间线事件，包括已被压缩隐藏的事件；不会导入压缩摘要，也不会因 Horae 后续压缩而更新或移除 MP 中已有的记忆。旧版已经同步的压缩摘要会继续保留，其楼层不会重复导入。</div>
+          <div id="mp_hl"></div>
+        </div>
         <div class="pg" id="mp_pg_batch">
+          <section class="autosummary">
+            <div class="autosummaryhead"><div class="autosummarytitle">自动楼层总结</div><label class="mp-check"><input type="checkbox" id="mp_auto_enabled">启用</label></div>
+            <div class="ht">AI 每次回复完成后检查一次；达到设定楼层数时，只按顺序总结下一段，不会连续追赶多段。</div>
+            <div class="autosummarygrid">
+              <div class="fg"><label>自动总结间隔（楼层）</label><input id="mp_auto_interval" type="number" min="2" max="200" value="20"></div>
+              <div class="fg"><label>开始总结楼层</label><input id="mp_auto_start" type="number" min="1" value="1"></div>
+              <div class="fg"><label>总结后的记忆如何导入</label><select id="mp_auto_priority_mode"><option value="fixed">按指定类型导入</option><option value="ai">按 AI 建议导入</option></select></div>
+              <div class="fg" id="mp_auto_fixed_wrap"><label>指定导入类型</label><select id="mp_auto_fixed"><option value="high">常驻</option><option value="medium">主要触发</option><option value="low">次级触发</option></select></div>
+            </div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:2px"><label class="mp-check"><input type="checkbox" id="mp_auto_hide">总结成功后隐藏旧楼层</label></div>
+            <div class="fg" id="mp_auto_keep_wrap" style="margin-top:9px"><label>始终保留最后 N 楼不隐藏</label><input id="mp_auto_keep" type="number" min="0" max="200" value="6"></div>
+            <div class="ht">“隐藏”只会把已成功自动总结的旧楼层排除在 AI 上下文之外，不删除聊天原文。关闭后会恢复由 MemoryPilot 隐藏的楼层。</div>
+            <div class="autosummarystatus" id="mp_auto_status"></div>
+            <div class="autosummaryactions"><button class="btn bp1" id="mp_auto_save">保存自动总结设置</button><button class="btn" id="mp_auto_retry" style="display:none">重试失败区间</button></div>
+          </section>
+          <div class="automanualtitle">手动楼层总结</div>
           <div class="fg">
             <label>选择楼层 <span class="ht">(共${chat.length}层)</span></label>
             <input id="mp_bf" placeholder="最近20 或 5-30, 45-60" value="最近20">
+            <div class="ht" style="margin-top:5px">支持三种写法：最近20、10-30、5；可组合使用，用逗号分隔。</div>
           </div>
           <div class="fg">
-            <label>关键词搜索楼层（空格分隔多词）</label>
+            <label>按关键词查找楼层（可选，空格分隔多词）</label>
             <div style="display:flex;gap:5px">
               <input id="mp_bk" placeholder="如: 击剑 银星" style="flex:1">
               <button class="btn" id="mp_bkb">搜索</button>
               <button class="btn" id="mp_bkc">清空</button>
             </div>
           </div>
-          <div id="mp_search_view"><div id="mp_bkr"></div><div class="opline" id="mp_bk_status"></div><div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"><button class="btn" id="mp_bk_fill_sel">填入勾选楼层</button><button class="btn" id="mp_bk_fill_rng">按连续区间填入</button><button class="btn" id="mp_bk_pick_all">全选结果</button><button class="btn bd1" id="mp_bk_pick_none">清空勾选</button></div><div class="fg" style="margin-top:8px"><label>上下文半径 <span id="mp_bctxr_val" class="ht">±6层</span></label><input id="mp_bctxr" type="range" min="1" max="30" value="6" style="width:100%"></div></div><div id="mp_context_view" style="display:none"><div id="mp_bctx" class="ctxbox" style="max-height:56dvh;min-height:260px;overflow:auto;overscroll-behavior:contain;resize:vertical"><div class="tiny">点击搜索结果中的“查看上下文”或勾选结果后，可在这里查看附近上下文并批量选楼层。</div></div>
+          <div id="mp_search_view">
+            <div class="searchtools">
+              <div class="opline" id="mp_bk_status">搜索后可勾选需要总结的楼层</div>
+              <div class="searchactions"><button class="btn bp1" id="mp_bk_apply">使用已选楼层</button><button class="btn" id="mp_bk_pick_all">全选结果</button><button class="btn bd1" id="mp_bk_pick_none">清空选择</button></div>
+            </div>
+            <div id="mp_bkr"></div>
+          </div><div id="mp_context_view" style="display:none"><div id="mp_bctx" class="ctxbox" style="max-height:56dvh;min-height:260px;overflow:auto;overscroll-behavior:contain;resize:vertical"><div class="tiny">点击搜索结果中的“查看前后楼层”，可以查看并选择该楼层前后的聊天内容。</div></div>
 </div>
           <details class="det">
             <summary>总结 Prompt（可编辑）</summary>
@@ -1478,50 +1768,76 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
               <button class="btn bd1" id="mp_bpd">恢复默认</button>
             </div>
           </details>
-          <button class="btn bp1" id="mp_brun" style="width:100%;padding:9px;font-size:13px;margin-top:9px">开始分析</button>
+          <button class="btn bp1" id="mp_brun" style="width:100%;padding:9px;font-size:13px;margin-top:9px">开始总结</button>
           <div id="mp_br" style="margin-top:9px"></div>
         </div>
         <div class="pg" id="mp_pg_cfg">
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
-            <button class="btn bp1" id="mp_open_guide" style="flex:1;padding:9px;font-size:13px">打开新手指引</button>
-          </div>
+          <nav class="cfgsubnav" aria-label="设置分类">
+            <button class="cfgsubtab" data-cfg-action="api">API 配置</button>
+            <button class="cfgsubtab on" data-cfg-target="recall">召回设置</button>
+            <button class="cfgsubtab" data-cfg-target="filter">文本过滤</button>
+            <button class="cfgsubtab" data-cfg-target="data">数据管理</button>
+          </nav>
+          <section class="cfgsection on" data-cfg-section="recall">
+          <div class="cfgcard">
+          <div class="cfgtitle">召回设置</div>
           <div class="fg"><label>召回周期（回合）</label><input id="mp_revery" type="number" min="1" max="50" value="${h(String(loadRecallCfg().every))}"></div>
           <div class="fg" style="margin-top:12px"><label>距离衰减系数 α（0~0.95）</label><input id="mp_ralpha" type="number" min="0" max="0.95" step="0.01" value="${h(String(loadRecallCfg().alpha))}"></div>
-          <div class="fg" style="margin-top:12px"><label>最大召回条数（Top N）</label><input id="mp_rmaxn" type="number" min="1" max="20" value="${h(String(loadRecallCfg().maxRecall||6))}"></div>
+          <div class="fg" style="margin-top:12px"><label>最大触发召回数（不含常驻）</label><input id="mp_rmaxn" type="number" min="1" max="20" value="${h(String(loadRecallCfg().maxRecall||6))}"></div>
           <div class="fg" style="margin-top:12px"><label>上下文窗口（匹配最近 N 条）</label><input id="mp_rctxwin" type="number" min="3" max="30" value="${h(String(loadRecallCfg().contextWindow||8))}"></div>
           <div class="fg" style="margin-top:12px"><label>粘性保持（命中后维持 N 轮）</label><input id="mp_rsticky" type="number" min="0" max="20" value="${h(String(loadRecallCfg().stickyTurns??5))}"></div>
-          <div class="ht" style="margin-bottom:10px">正式召回与正式写入都按每 N 回合执行；匹配窗口参考最近 N 回合原文。规则为：主关键词至少命中 1 个才入候选；若配置了门控关键词，则还必须至少命中 1 个门控关键词；通过后再进入距离衰减概率。这里的 α 是默认基准，单条记忆可在编辑页自定义覆盖。</div>
+          <div class="fg" style="margin-top:14px">
+            <label class="mp-check"><input type="checkbox" id="mp_anima_dedupe" ${loadRecallCfg().animaDedupe ? 'checked' : ''}>与 Anima 召回结果去重</label>
+            <div class="ht" style="margin-top:7px">同一条 Anima 总结已由 Anima 本轮召回时，MemoryPilot 不再重复注入；其他来源的记忆不受影响。</div>
+            <label class="mp-check" style="margin-top:10px"><input type="checkbox" id="mp_xiaobaix_dedupe" ${loadRecallCfg().xiaobaixDedupe ? 'checked' : ''}>与小白 X 召回结果去重</label>
+            <div class="ht" style="margin-top:7px">仅移除本轮已由小白 X 注入的 xb_event；手动记忆、Anima、Horae、楼层总结不受影响。小白 X 读取失败时自动回退原召回。</div>
+          </div>
+          <div class="ht" style="margin-bottom:10px">正式召回按每 N 回合执行；插件在最近 N 条聊天中匹配已有记忆关键词，不调用 AI。常驻记忆不占最大触发召回数；主要触发和次级触发需命中主关键词，辅助关键词用于提高语境匹配度，未命中时会降低排序但不会直接淘汰。若同时命中多条，插件会根据关键词匹配程度、楼层距离和召回类型进行排序。</div>
           <button class="btn bp1" id="mp_rssv" style="width:100%;padding:9px;font-size:13px;margin-bottom:14px">保存召回设置</button>
-          <div class="fg"><label>关键词黑名单（逗号或换行分隔）</label><textarea id="mp_bl" style="min-height:100px">${h(loadBlacklist().join('\n'))}</textarea></div>
-          <div class="ht" style="margin-bottom:10px">黑名单只作用于 keywords，不影响 entityKeywords 展示。适合放人物名、常见称呼、容易误触发的泛词。</div>
+          </div>
+          </section>
+          <section class="cfgsection" data-cfg-section="filter">
+          <div class="cfgcard">
+          <div class="cfgtitle">关键词与文本过滤</div>
+          <div class="fg"><label>关键词黑名单</label><textarea class="cleaneditor" id="mp_bl" style="min-height:100px">${h(loadBlacklist().join('\n'))}</textarea></div>
+          <div class="ht" style="margin-bottom:10px">这些词不会参与召回匹配。使用逗号或换行分隔；加入黑名单不会影响人物关键词的显示。</div>
           <button class="btn bp1" id="mp_blsv" style="width:100%;padding:9px;font-size:13px">保存关键词黑名单</button>
-          <div class="fg" style="margin-top:14px"><label>块级筛除标签（每行一个，不区分大小写）</label><textarea id="mp_ctags" style="min-height:90px">${h(loadCleaner().blockTags.join('\n'))}</textarea></div>
-          <div class="ht" style="margin-bottom:8px">会整段删除 &lt;tag&gt;...&lt;/tag&gt;，适合 think、details、meta、ooc 这类结构层内容。</div>
-          <div class="fg"><label>行级筛除前缀（每行一个）</label><textarea id="mp_cprefix" style="min-height:80px">${h(loadCleaner().linePrefixes.join('\n'))}</textarea></div>
-          <div class="ht" style="margin-bottom:8px">适合 affinity_change:、state_update: 这种单行元信息。</div>
-          <div class="fg"><label>正则筛除规则（每行一个）</label><textarea id="mp_cregex" style="min-height:80px">${h(loadCleaner().regexRules.join('\n'))}</textarea></div>
-          <div class="ht" style="margin-bottom:10px">用于删掉分隔线或特殊占位符，例如 ^____+$ 。</div>
+          <div class="cfgtitle" style="margin-top:18px">文本清洗</div>
+          <div class="ht" style="margin-bottom:12px">插件在匹配记忆关键词或总结楼层前，会按照下方规则删除不需要参与处理的内容。文本清洗只影响插件读取到的文本，不会修改聊天原文。</div>
+          <div class="fg"><label>删除指定标签及其内容</label><div class="ht" style="margin:4px 0 7px">删除指定标签及标签内部的全部内容。每行填写一个标签名称，例如 think、details、meta。</div><textarea class="cleaneditor" id="mp_ctags" style="min-height:90px">${h(loadCleaner().blockTags.join('\n'))}</textarea></div>
+          <div class="fg"><label>删除指定开头的整行</label><div class="ht" style="margin:4px 0 7px">如果一行文字以这里填写的内容开头，就删除整行。每行填写一种开头，例如 affinity_change:。</div><textarea class="cleaneditor" id="mp_cprefix" style="min-height:80px">${h(loadCleaner().linePrefixes.join('\n'))}</textarea></div>
+          <div class="fg"><label>用正则删除内容（高级）</label><div class="ht" style="margin:4px 0 7px">每行填写一条正则表达式，不需要添加两侧的 /，也不需要填写 g。例如删除 HTML 注释可填写 &lt;!--[\s\S]*?--&gt;。</div><textarea class="cleaneditor" id="mp_cregex" style="min-height:80px">${h(loadCleaner().regexRules.join('\n'))}</textarea></div>
           <div class="fg">
             <label>作用范围</label>
             <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px">
-              <label style="display:flex;align-items:center;gap:6px;color:#ccc"><input type="checkbox" id="mp_c_recall" ${loadCleaner().cleanForRecall ? 'checked' : ''}>召回匹配前清洗</label>
-              <label style="display:flex;align-items:center;gap:6px;color:#ccc"><input type="checkbox" id="mp_c_batch" ${loadCleaner().cleanForBatch ? 'checked' : ''}>批量分析前清洗</label>
+              <label class="mp-check"><input type="checkbox" id="mp_c_recall" ${loadCleaner().cleanForRecall ? 'checked' : ''}>召回匹配前清洗</label>
+              <label class="mp-check"><input type="checkbox" id="mp_c_batch" ${loadCleaner().cleanForBatch ? 'checked' : ''}>楼层总结前清洗</label>
             </div>
           </div>
           <button class="btn bp1" id="mp_clsv" style="width:100%;padding:9px;font-size:13px">保存文本清洗规则</button>
-          <div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.08)">
-            <div class="fg"><label style="font-size:13px;color:#fff;font-weight:600">旧版数据自检 / 清理</label></div>
-            <div class="ht" id="mp_cleanup_summary" style="margin-bottom:8px">正在检测当前聊天中的旧版 MP / LWB 快照痕迹…</div>
+          </div>
+          </section>
+          <section class="cfgsection" data-cfg-section="data">
+          <div class="cfgcard">
+          <div class="cfgtitle">旧版数据清理</div>
+          <div>
+            <div class="fg"><label style="font-size:13px;color:#fff;font-weight:600">旧版数据检测与清理</label></div>
+            <div class="ht" style="margin-bottom:9px">这里只用于处理旧版 MemoryPilot 留在聊天文件里的重复数据，不是日常维护功能。</div>
+            <div class="cleanupresult" id="mp_cleanup_summary">正在检测当前聊天中的旧版 MP / 小白X（LWB）快照残留…</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
-              <button class="btn" id="mp_cleanup_refresh" style="flex:1;padding:9px;font-size:13px">刷新检测</button>
-              <button class="btn" id="mp_cleanup_mp" style="flex:1;padding:9px;font-size:13px">清理旧 MP 痕迹</button>
-              <button class="btn bd1" id="mp_cleanup_lwb" style="flex:1;padding:9px;font-size:13px">清理 LWB 快照中的 MP 痕迹</button>
+              <button class="btn" id="mp_cleanup_refresh" style="flex:1;padding:9px;font-size:13px">重新检测</button>
+              <button class="btn" id="mp_cleanup_mp" style="flex:1;padding:9px;font-size:13px">清理旧版聊天残留</button>
+              <button class="btn bd1" id="mp_cleanup_lwb" style="flex:1;padding:9px;font-size:13px">清理小白X快照里的旧 MP 副本</button>
             </div>
+            <div class="ht" style="margin-top:9px;line-height:1.65">只有检测到对应的旧版残留时，清理按钮才会启用。清理不会删除记忆列表或小白X总结；执行前仍建议先在下方导出一次 MP 数据。</div>
             <div class="ht" id="mp_cleanup_status" style="margin-top:6px"></div>
           </div>
-          <div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.08)">
+          </div>
+          <div class="cfgcard">
+          <div class="cfgtitle">导入与导出</div>
+          <div>
             <div class="fg"><label style="font-size:13px;color:#fff;font-weight:600">记忆数据 导出 / 导入</label></div>
-            <div class="ht" style="margin-bottom:10px">导出包含：全部记忆、召回设置、关键词黑名单、文本清洗规则、API 配置、Prompt 模板。可在不同酒馆环境间迁移。</div>
+            <div class="ht" style="margin-bottom:10px">导出包含：全部记忆、召回设置、自动总结设置、关键词黑名单、文本清洗规则、API 配置、Prompt 模板。自动总结的当前进度不会迁移。</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
               <button class="btn bp1" id="mp_export" style="flex:1;padding:9px;font-size:13px">导出 MP 数据</button>
               <button class="btn" id="mp_import" style="flex:1;padding:9px;font-size:13px">导入 MP 数据</button>
@@ -1529,6 +1845,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
             </div>
             <div class="ht" id="mp_io_status" style="margin-top:6px"></div>
           </div>
+          </div>
+          </section>
         </div>
       </div>
       <div class="floatnav">
@@ -1539,55 +1857,60 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         <div class="mask" id="mp_guide_mask"></div>
         <div class="guidebox">
           <h4>Memory Pilot 新手指引</h4>
-          <ol>
-            <li>先到 XB 事件页导入需要的事件，可以导入为置顶、普通或低优先级。<button class="btn stepgo" data-guide-tab="xb">去 XB 事件</button></li>
-            <li>XB 事件导入后必须重构关键词。可以在记忆列表勾选 XB 事件后批量重构，也可以进入编辑页手动调整。<button class="btn stepgo" data-guide-tab="list">去记忆列表</button></li>
-            <li>合并事件时可以在“关键词”下拉里选择“AI重构关键词”，适合把多个零散事件整理成一条更干净的记忆。<button class="btn stepgo" data-guide-tab="list">去合并入口</button></li>
-            <li>已有记忆可以再编辑；搜索后点击事件标题，会回到完整列表并跳转到该条记忆的位置。<button class="btn stepgo" data-guide-tab="add">去编辑页</button></li>
-            <li>需要把事件记忆 prompt 单项加入 system prompt，之后可在 chat_history 或召回监控中确认是否触发。<button class="btn stepgo" data-guide-action="monitor">打开召回监控</button></li>
-            <li>副 API 设置用于关键词重构、合并和分析；OAI 兼容格式可用。<button class="btn stepgo" data-guide-action="api">打开 API 设置</button></li>
-            <li>“分析”页用于补充自动总结没有覆盖好的事件；不是必需流程。<button class="btn stepgo" data-guide-tab="batch">去分析页</button></li>
-            <li>过滤页包含召回设置、关键词黑名单、清洗规则、导入导出，以及本指引入口。<button class="btn stepgo" data-guide-tab="cfg">去过滤页</button></li>
-          </ol>
+          <div class="guideintro">第一次使用时，请按顺序完成下面的设置。</div>
+          <div class="guidesteps">
+            <section class="guidestep">
+              <div class="guidestephead"><b>1. 在当前聊天使用的预设中新建记忆注入条目</b><span class="guidetag">必做</span></div>
+              <p>该条目用于让 AI 读取 MemoryPilot 召回的记忆。更换预设后，记得在新预设中也新建这个条目。</p>
+              <details class="guideinject">
+                <summary>查看新建方法</summary>
+                <p>在当前预设中新建一个条目。条目在预设列表中的排列位置随意，内容设置如下：</p>
+                <ul><li>身份：系统</li><li>位置：聊天中</li><li>深度：4</li><li>顺序：100</li><li>深度与顺序可以根据自己的预设调整。</li></ul>
+                <textarea class="guideprompt" id="mp_inject_prompt" readonly>${h(RECALL_INJECT_PROMPT)}</textarea>
+                <button class="btn bp1" id="mp_copy_inject" type="button" style="margin-top:7px">复制 Prompt</button>
+              </details>
+            </section>
+            <section class="guidestep">
+              <div class="guidestephead"><b>2. 配置总结 API</b></div>
+              <p>小白X、Anima、Horae 关键词重构、楼层总结和合并记忆会使用这里配置的 API。完全手动填写记忆和关键词时可以跳过。</p>
+              <button class="btn stepgo" data-guide-action="api">前往 API 设置</button>
+            </section>
+            <section class="guidestep">
+              <div class="guidestephead"><b>3. 创建第一批记忆（五选一）</b></div>
+              <div class="guidebranches">
+                <div class="guidebranch"><b>小白X总结</b><br>点击一种导入方式，将小白X总结加入记忆列表。三种导入方式的区别，可以在“记忆列表使用说明”的“召回类型”中查看。导入后回到记忆列表，选择“未重构小白X总结”，执行“批量重构关键词”。<br><button class="btn stepgo" data-guide-tab="xb">前往小白X总结</button></div>
+                <div class="guidebranch"><b>Anima总结</b><br>从当前聊天绑定的世界书读取 Anima 总结并加入记忆列表。导入后回到记忆列表，选择“未重构Anima总结”，执行“批量重构关键词”。<br><button class="btn stepgo" data-guide-tab="anima">前往 Anima总结</button></div>
+                <div class="guidebranch"><b>Horae记忆</b><br>读取 Horae 的原始时间线事件，并只导入尚未加入记忆列表的部分。Horae 后续压缩不会改动已导入记忆。导入后回到记忆列表，选择“未重构Horae记忆”，执行“批量重构关键词”。<br><button class="btn stepgo" data-guide-tab="horae">前往 Horae记忆</button></div>
+                <div class="guidebranch"><b>楼层总结</b><br>可以手动选择聊天楼层生成候选记忆，也可以在页面中开启按楼层间隔自动总结。<br><button class="btn stepgo" data-guide-tab="batch">前往楼层总结</button></div>
+                <div class="guidebranch"><b>手动新建（不建议新手使用）</b><br>需要自行填写事件名、摘要、主关键词和召回类型。<br><button class="btn stepgo" data-guide-tab="add">手动新建记忆</button></div>
+              </div>
+            </section>
+            <section class="guidestep">
+              <div class="guidestephead"><b>4. 确认记忆已经可以使用</b></div>
+              <p>前往记忆列表，确认至少存在一条记忆，并且已经设置召回类型和主关键词；外部插件导入的记忆不再显示“未重构”。</p>
+              <button class="btn stepgo" data-guide-tab="list">检查记忆列表</button>
+            </section>
+            <div class="guidenote"><b>暂时没有记忆内容也很正常。</b><br>如果刚开始一段新聊天，没有小白X总结可以导入、也没有足够的楼层可以总结，先继续聊天，积累一些内容后再回来使用即可。</div>
+          </div>
           <div class="gbar">
-            <button class="btn" id="mp_guide_later">稍后再看</button>
-            <button class="btn bp1" id="mp_guide_ok">知道了</button>
+            <button class="btn bp1" id="mp_guide_ok">关闭</button>
           </div>
         </div>
       </div>
     </div>
   `;
   document.body.appendChild(root);
-  // Match the reference package wording for the text-cleaning controls while
-  // keeping the existing storage/configuration IDs and behavior intact.
-  const cleanText = (id, label, hint) => {
-    const field = document.getElementById(id);
-    const box = field?.closest('.fg');
-    if (!box) return;
-    const title = box.querySelector('label');
-    if (title) title.textContent = label;
-    const note = box.nextElementSibling?.classList.contains('ht') ? box.nextElementSibling : null;
-    if (note && hint) note.textContent = hint;
+  root.querySelector('[data-hub="monitor"]')?.addEventListener('click', () => window.MemoryPilot?.openMonitor?.());
+  root.querySelector('[data-hub="settings"]')?.addEventListener('click', () => window.MemoryPilot?.openApiConfig?.());
+  const activateCfgSection = (section) => {
+    const next = ['recall', 'filter', 'data'].includes(section) ? section : 'recall';
+    root.querySelectorAll('[data-cfg-target]').forEach(btn => btn.classList.toggle('on', btn.getAttribute('data-cfg-target') === next));
+    root.querySelectorAll('[data-cfg-section]').forEach(el => el.classList.toggle('on', el.getAttribute('data-cfg-section') === next));
+    root.querySelector('.bd')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
-  cleanText('mp_ctags', '块级筛除标签（每行一个，不区分大小写）', '会整段删除 <tag>...</tag>，适合 think、details、meta、ooc 这类结构层内容。');
-  cleanText('mp_cprefix', '行级筛除前缀（每行一个）', '适合 affinity_change:、mood_change:、state_update: 这类单行元信息。');
-  cleanText('mp_cregex', '用正则删除内容（高级）', '每行填写一条正则表达式，不需要添加两侧的 /，也不需要填写 g。例如删除 HTML 注释可填写 <!--[\\s\\S]*?-->');
-
-  // Reference-package wording and guidance for text cleaning.
-  cleanText('mp_ctags', '块级筛除标签（每行一个，不区分大小写）', '会整段删除 <tag>...</tag>，适合 think、details、meta、ooc 这类结构层内容。');
-  cleanText('mp_cprefix', '行级筛除前缀（每行一个）', '适合 affinity_change:、mood_change:、state_update: 这类单行元信息。');
-  cleanText('mp_cregex', '用正则删除内容（高级）', '每行填写一条正则表达式，不需要添加两侧的 /，也不需要填写 g。例如删除 HTML 注释可填写 <!--[\\s\\S]*?-->。');
-  const cfgPage = document.getElementById('mp_pg_cfg');
-  if (cfgPage && !cfgPage.querySelector('.mp-clean-intro')) {
-    const intro = document.createElement('div');
-    intro.className = 'mp-clean-intro ht';
-    intro.innerHTML = '<strong>文本清洗</strong><br>插件在匹配记忆关键词或总结楼层前，会按照下方规则删除不需要参与处理的内容。<br>文本清洗只影响插件读取到的文本，不会修改聊天原文。';
-    cfgPage.insertBefore(intro, cfgPage.firstElementChild?.nextElementSibling || cfgPage.firstElementChild);
-  }
-  const recallScope = cfgPage?.querySelector('#mp_c_recall')?.parentElement;
-  const batchScope = cfgPage?.querySelector('#mp_c_batch')?.parentElement;
-  if (recallScope) recallScope.lastChild.textContent = '召回匹配前清洗';
-  if (batchScope) batchScope.lastChild.textContent = '楼层总结前清洗';
+  root.querySelectorAll('[data-cfg-target]').forEach(btn => btn.addEventListener('click', () => activateCfgSection(btn.getAttribute('data-cfg-target'))));
+  root.querySelector('[data-cfg-action="api"]')?.addEventListener('click', () => window.MemoryPilot?.openApiConfig?.());
+  activateCfgSection(initialCfg);
 
   let selectedIds = new Set();
   let searchPicked = new Set();
@@ -1597,15 +1920,38 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   let kwRunningId = null;
   let lastDeleted = null;
   let searchCursor = -1;
+  let multiSelectMode = false;
 
   let _listFilter = 'all';
   let _listSearch = '';
+  const updateSelectionUI = (prefix = '') => {
+    if ($('mp_filter_selected')) $('mp_filter_selected').textContent = `已选 ${selectedIds.size} 条`;
+    if (!selectedIds.size) $('mp_merge_setup')?.classList.remove('on');
+  };
+  const setMultiSelectMode = (enabled) => {
+    multiSelectMode = !!enabled;
+    root.classList.toggle('multi-select-on', multiSelectMode);
+    const btn = $('mp_multi_toggle');
+    if (btn) {
+      btn.textContent = multiSelectMode ? '退出多选' : '多选';
+      btn.classList.toggle('bp1', multiSelectMode);
+      btn.setAttribute('aria-pressed', multiSelectMode ? 'true' : 'false');
+    }
+  };
+  const memoryId = memory => String(memory?.id ?? '');
+  const selectMemoryBatch = (predicate, successMessage, emptyMessage) => {
+    selectedIds = new Set(memories.filter(predicate).map(memoryId).filter(Boolean));
+    if (selectedIds.size) setMultiSelectMode(true);
+    renderList();
+    updateSelectionUI();
+    if (selectedIds.size) toastr?.success?.(successMessage(selectedIds.size));
+    else toastr?.warning?.(emptyMessage);
+  };
   const getVisibleMemories = () => {
     let filtered = memories;
     if (_listFilter === 'high') filtered = memories.filter(m => m.priority === 'high');
     else if (_listFilter === 'medium') filtered = memories.filter(m => m.priority === 'medium' || (!m.priority));
     else if (_listFilter === 'low') filtered = memories.filter(m => m.priority === 'low');
-    else if (_listFilter === 'xb_norecon') filtered = memories.filter(m => m.source === 'xb_event' && m.keywordSource !== 'xb_llm');
     if (_listSearch) {
       const q = _listSearch.toLowerCase();
       filtered = filtered.filter(m =>
@@ -1631,7 +1977,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     if (!_listSearch || !items.length) { toastr?.warning?.('没有可跳转的搜索结果'); return; }
     searchCursor = (searchCursor + dir + items.length) % items.length;
     scrollToListItem(items[searchCursor]?.id);
-    $('mp_sel_info').textContent = `搜索结果 ${searchCursor + 1}/${items.length} · 已选 ${selectedIds.size} 条记忆`;
+    updateSelectionUI(`搜索结果 ${searchCursor + 1}/${items.length}`);
   };
   const makeDeleteSnapshot = (predicate) => memories
     .map((memory, index) => ({ memory, index }))
@@ -1657,10 +2003,18 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       bar.style.display = 'none';
       renderList();
       renderXb();
+      renderAnima();
+      renderHorae();
       toastr?.success?.('已撤回删除');
     };
   };
   const activateTab = (tab) => {
+    const settingsMode = tab === 'cfg';
+    const tabs = root.querySelector('.tabs');
+    if (tabs) tabs.style.display = settingsMode ? 'none' : 'flex';
+    root.querySelector('[data-hub="memory"]')?.classList.toggle('on', !settingsMode);
+    root.querySelector('[data-hub="settings"]')?.classList.toggle('on', settingsMode);
+    root.querySelector('[data-hub="monitor"]')?.classList.remove('on');
     root.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
     root.querySelectorAll('.pg').forEach(x=>x.classList.remove('on'));
     root.querySelector(`.tab[data-t="${tab}"]`)?.classList.add('on');
@@ -1670,37 +2024,46 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   const renderList=()=>{
     memories = dedupeMemories(loadMem());
     $('mp_n1').textContent=memories.length;
+    $('mp_nallpick').textContent=memories.length;
     $('mp_n2').textContent=memories.filter(m=>m.priority==='high').length;
+    $('mp_nmed').textContent=memories.filter(m=>m.priority==='medium'||!m.priority).length;
     $('mp_n4').textContent=memories.filter(m=>m.priority==='low').length;
     $('mp_n3').textContent=memories.filter(m=>m.source==='xb_event').length;
+    $('mp_nxbnr').textContent=memories.filter(m=>m.source==='xb_event'&&m.keywordSource!=='xb_llm').length;
+    $('mp_nanima').textContent=memories.filter(m=>m.source==='anima_summary').length;
+    $('mp_nanimanr').textContent=memories.filter(m=>m.source==='anima_summary'&&m.keywordSource!=='anima_llm').length;
+    $('mp_nhorae').textContent=memories.filter(m=>m.source==='horae_memory').length;
+    $('mp_nhoraenr').textContent=memories.filter(m=>m.source==='horae_memory'&&m.keywordSource!=='horae_llm').length;
+    updateSelectionUI();
     const c=$('mp_list');
     if(!memories.length){c.innerHTML='<div class="emp">暂无记忆</div>';return;}
     let filtered = getVisibleMemories();
     if (searchCursor >= filtered.length) searchCursor = filtered.length ? filtered.length - 1 : -1;
     if(!filtered.length){c.innerHTML='<div class="emp">无匹配记忆（共 '+memories.length+' 条）</div>';return;}
     c.innerHTML=filtered.map(m=>{
-      const pin=m.priority==='high'?'[置顶] ':'';
-      const src=m.source==='xb_event'?'<span class="kw kx">XB</span>':(m.source==='batch'?'<span class="kw kx">BATCH</span>':(m.source==='merged'?'<span class="kw kx">MERGED</span>':''));
-      const pc=m.priority==='high'?'bph':m.priority==='medium'?'bpm':'bpl';
-      const pl=m.priority==='high'?'置顶':m.priority==='medium'?'普通':'低';
+      const priority=m.priority||'medium';
+      const pin=priority==='high'?'[常驻] ':'';
+      const src=m.source==='xb_event'?'<span class="kw kx">小白X总结</span>':(m.source==='anima_summary'?'<span class="kw kx">Anima总结</span>':(m.source==='horae_memory'?'<span class="kw kx">Horae记忆</span>':((m.source==='batch'||m.source==='auto_batch')?'<span class="kw kx">楼层总结</span>':(m.source==='merged'?'<span class="kw kx">合并</span>':''))));
+      const pc=priority==='high'?'bph':priority==='medium'?'bpm':'bpl';
+      const pl=priority==='high'?'常驻':priority==='medium'?'主要触发':'次级触发';
       const floorText = formatFloorSegments(m);
       const time = (m.timeLabel || floorText) ? `<div class="ht">${h(m.timeLabel || '')}${floorText ? ' | ' + floorText : ''}</div>` : '';
       const pkw = (m.primaryKeywords || m.keywords || []).map(k=>'<span class="kw">'+h(k)+'</span>').join('');
       const skw = (m.secondaryKeywords || []).map(k=>'<span class="kw kx">'+h(k)+'</span>').join('');
       const ent = (m.entityKeywords||[]).map(k=>'<span class="kw ke">'+h(k)+'</span>').join('');
-      const canRebuild = m.source === 'xb_event';
-      const pick = `<label class="ht" style="display:flex;align-items:center;gap:6px"><input type="checkbox" class="mp_pick" data-id="${h(m.id)}" ${selectedIds.has(m.id)?'checked':''}>选择</label>`;
+      const canRebuild = isRebuildableMemory(m);
+      const pick = `<label class="ht mp-pick-wrap" title="选择此记忆"><input type="checkbox" class="mp_pick" aria-label="选择此记忆" data-id="${h(m.id)}" ${selectedIds.has(memoryId(m))?'checked':''}></label>`;
       const rebuildBtn = canRebuild ? `<button class="btn bp1" onclick="window._mpKR('${m.id}')">${kwRunning && kwRunningId===m.id ? '中止重构' : '优化关键词'}</button>` : '';
       return `<div class="mi" data-mid="${h(m.id)}"><div class="mh"><span class="me jump" title="跳转到完整列表中的位置" onclick="window._mpJump('${m.id}')">${pin}${h(m.event)}</span><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${pick}<span class="bp ${pc}">${pl}</span></div></div>${time}<div class="ms">${h(m.summary)}</div><div class="kr">${src}${pkw}${skw}${ent}</div><div class="ma">${rebuildBtn}<button class="btn" onclick="window._mpE('${m.id}')">编辑</button><button class="btn bd1" onclick="window._mpD('${m.id}')">删除</button></div></div>`;
     }).join('');
-    $('mp_sel_info').textContent = `已选 ${selectedIds.size} 条记忆`;
+    updateSelectionUI();
     c.querySelectorAll('.mp_pick').forEach(el=>{
       el.onchange = () => {
         const id = el.getAttribute('data-id');
         if (!id) return;
         if (el.checked) selectedIds.add(id);
         else selectedIds.delete(id);
-        $('mp_sel_info').textContent = `已选 ${selectedIds.size} 条记忆`;
+        updateSelectionUI();
       };
     });
   };
@@ -1708,21 +2071,209 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   const renderXb=()=>{
     const st=$('mp_xst');
     if(!xbEvents.length){
-      let w='未知';try{const cm=ctx.chatMetadata;if(!cm)w='chatMetadata空';else if(!cm.extensions)w='extensions无';else if(!cm.extensions.LittleWhiteBox)w='LWB数据无';else w='events空';}catch(e){w=e.message;}
+      let w='未知';try{const cm=ctx.chatMetadata;if(!cm)w='聊天元数据为空';else if(!cm.extensions)w='扩展数据为空';else if(!cm.extensions.LittleWhiteBox)w='未检测到小白X数据';else w='小白X总结为空';}catch(e){w=e.message;}
       st.innerHTML=`<div class="ht" style="color:#fbbf24">${w}</div>`;
-      $('mp_xl').innerHTML='<div class="emp">请先在LittleWhiteBox生成总结</div>';return;
+      $('mp_xl').innerHTML='<div class="emp">请先使用小白X生成事件总结</div>';return;
     }
     st.innerHTML=`<div class="ht" style="color:#4ade80">${xbEvents.length} 个事件</div>`;
-    const fl=($('mp_xs')?.value||'').toLowerCase(),tf=$('mp_xty')?.value||'',wf=$('mp_xwt')?.value||'';
-    const filtered=xbEvents.filter(e=>{if(tf&&e.type!==tf)return false;if(wf&&e.weight!==wf)return false;if(fl&&![e.title,e.summary,...(e.participants||[])].join(' ').toLowerCase().includes(fl))return false;return true;});
+    const imported=new Map(memories.filter(m=>m.xbEventId).map(m=>[String(m.xbEventId),m]));
+    const fl=($('mp_xs')?.value||'').toLowerCase(),tf=$('mp_xty')?.value||'',wf=$('mp_xwt')?.value||'',mf=$('mp_xmp')?.value||'';
+    const filtered=xbEvents.filter(e=>{
+      if(tf&&e.type!==tf)return false;
+      if(wf&&e.weight!==wf)return false;
+      const importedMemory=imported.get(String(e.id));
+      if(mf==='unimported'&&importedMemory)return false;
+      if((mf==='high'||mf==='medium'||mf==='low')&&(!importedMemory||(importedMemory.priority||'medium')!==mf))return false;
+      if(fl&&![e.title,e.summary,...(e.participants||[])].join(' ').toLowerCase().includes(fl))return false;
+      return true;
+    });
     if(!filtered.length){$('mp_xl').innerHTML='<div class="emp">无匹配</div>';return;}
-    const done=new Set(memories.filter(m=>m.xbEventId).map(m=>String(m.xbEventId)));
     $('mp_xl').innerHTML=filtered.map(e=>{
-      const d=done.has(String(e.id));
+      const importedMemory=imported.get(String(e.id));
+      const d=!!importedMemory;
+      const currentPriority=importedMemory?.priority||'medium';
+      const priorityButton=(value,label)=>`<button class="btn ${currentPriority===value?'bp1':''}" ${currentPriority===value?'disabled aria-current="true"':''} onclick="window._mpXI('${h(e.id)}','${value}')">${currentPriority===value?'当前：':''}${label}</button>`;
       const fr=deriveFloorRangeFromXB(e);
       const frLabel=Array.isArray(fr)?` | #${fr[0]}-${fr[1]}`:'';
-      return `<div class="xi"><div class="mh"><span class="xt">${h(e.title)}</span><span class="ht">${h(e.type||'')} ${h(e.weight||'')}</span></div><div class="ht">${h(e.timeLabel||'')} | ${h(e.id)}${h(frLabel)}</div><div class="ms">${h(e.summary)}</div><div class="xp">${(e.participants||[]).map(p=>h(p)).join(', ')||'—'}</div><div class="ma">${d?`<span class="ht" style="margin-right:6px">已导入</span><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">改为置顶</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">改为普通</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">改为低</button><button class="btn bd1" onclick="window._mpD_xb('${h(e.id)}')">移除</button>`:`<button class="btn bp1" onclick="window._mpXI('${h(e.id)}','high')">置顶导入</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">普通导入</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">低导入</button>`}</div></div>`;
+      return `<div class="xi"><div class="mh"><span class="xt">${h(e.title)}</span><span class="ht">${h(e.type||'')} ${h(e.weight||'')}</span></div><div class="ht">${h(e.timeLabel||'')} | ${h(e.id)}${h(frLabel)}</div><div class="ms">${h(e.summary)}</div><div class="xp">${(e.participants||[]).map(p=>h(p)).join(', ')||'—'}</div><div class="ma">${d?`<span class="bp bpi">已导入</span>${priorityButton('high','常驻')}${priorityButton('medium','主要触发')}${priorityButton('low','次级触发')}<button class="btn bd1" onclick="window._mpD_xb('${h(e.id)}')">移除</button>`:`<button class="btn" onclick="window._mpXI('${h(e.id)}','high')">常驻导入</button><button class="btn bp1" onclick="window._mpXI('${h(e.id)}','medium')">主要触发导入</button><button class="btn" onclick="window._mpXI('${h(e.id)}','low')">次级触发导入</button>`}</div></div>`;
     }).join('');
+  };
+
+  const animaStatusText = () => {
+    if (animaState?.status === 'no_chat') return '当前没有打开聊天，暂时无法读取 Anima 总结。';
+    if (animaState?.status === 'helper_missing') return '未检测到 TavernHelper，暂时无法读取 Anima 世界书。';
+    if (animaState?.status === 'no_worldbook') return '当前聊天没有绑定世界书，未找到 Anima 总结。';
+    if (animaState?.status === 'error') return `读取 Anima 总结失败：${animaState?.error || '未知错误'}`;
+    if (animaState?.status === 'empty') return `当前世界书${animaState?.worldbookName ? `「${animaState.worldbookName}」` : ''}中暂无 Anima 总结。`;
+    return `当前世界书：${animaState?.worldbookName || '未知'} · 共 ${animaSummaries.length} 条 Anima 总结`;
+  };
+
+  const animaToMemory = (item, priority = 'medium') => ({
+    id: gid(),
+    event: item.event || `Anima总结 #${item.uniqueId || '?'}`,
+    primaryKeywords: uniq(item.tags || []),
+    secondaryKeywords: [],
+    entityKeywords: [],
+    summary: item.summary || '',
+    timeLabel: '',
+    timeValue: null,
+    floorRange: Array.isArray(item.floorRange) ? item.floorRange : null,
+    priority,
+    source: 'anima_summary',
+    animaSummaryId: item.animaSummaryId,
+    animaUniqueId: item.uniqueId,
+    animaWorldbook: animaState?.worldbookName || '',
+    timestamp: item.timestamp || Date.now(),
+    keywordSource: 'anima_auto'
+  });
+
+  const renderAnima = () => {
+    const status = $('mp_ast');
+    const list = $('mp_al');
+    const tabCount = $('mp_anima_tab_count');
+    if (!status || !list) return;
+    if (tabCount) tabCount.textContent = String(animaSummaries.length);
+    status.textContent = animaStatusText();
+
+    const imported = new Map(memories.filter(m => m.animaSummaryId).map(m => [String(m.animaSummaryId), m]));
+    const pending = animaSummaries.filter(item => !imported.has(String(item.animaSummaryId)));
+    const importAll = $('mp_anima_import_all');
+    if (importAll) {
+      importAll.textContent = pending.length ? `导入全部未导入总结（${pending.length}）` : '已全部导入';
+      importAll.disabled = !pending.length;
+    }
+
+    const query = ($('mp_as')?.value || '').trim().toLowerCase();
+    const mode = $('mp_amp')?.value || '';
+    const filtered = animaSummaries.filter(item => {
+      const memory = imported.get(String(item.animaSummaryId));
+      if (mode === 'unimported' && memory) return false;
+      if ((mode === 'high' || mode === 'medium' || mode === 'low') && (!memory || (memory.priority || 'medium') !== mode)) return false;
+      if (query && ![item.event, item.summary, ...(item.tags || [])].join(' ').toLowerCase().includes(query)) return false;
+      return true;
+    });
+
+    if (!animaSummaries.length) {
+      list.innerHTML = '<div class="emp">暂无可导入的 Anima 总结</div>';
+      return;
+    }
+    if (!filtered.length) {
+      list.innerHTML = '<div class="emp">无匹配总结</div>';
+      return;
+    }
+
+    list.innerHTML = filtered.map(item => {
+      const memory = imported.get(String(item.animaSummaryId));
+      const itemIndex = animaSummaries.indexOf(item);
+      const currentPriority = memory?.priority || 'medium';
+      const range = Array.isArray(item.floorRange) ? `#${item.floorRange[0]}-${item.floorRange[1]}` : '楼层未知';
+      const priorityButton = (value, label) => `<button class="btn ${memory && currentPriority === value ? 'bp1' : (!memory && value === 'medium' ? 'bp1' : '')}" ${memory && currentPriority === value ? 'disabled aria-current="true"' : ''} onclick="window._mpAI(${itemIndex},'${value}')">${memory && currentPriority === value ? '当前：' : ''}${label}${memory ? '' : '导入'}</button>`;
+      const tags = (item.tags || []).map(tag => `<span class="kw">${h(tag)}</span>`).join('');
+      return `<div class="xi"><div class="mh"><span class="xt">${h(item.event)}</span><span class="ht">Anima #${h(item.uniqueId)}</span></div><div class="ht">${h(range)}</div><div class="ms">${h(item.summary)}</div><div class="kr">${tags}</div><div class="ma">${memory ? '<span class="bp bpi">已导入</span>' : ''}${priorityButton('high','常驻')}${priorityButton('medium','主要触发')}${priorityButton('low','次级触发')}${memory ? `<button class="btn bd1" onclick="window._mpD_anima(${itemIndex})">移除</button>` : ''}</div></div>`;
+    }).join('');
+  };
+
+  const refreshAnima = async () => {
+    animaState = await loadCurrentAnimaSummaries({ context: ctx });
+    animaSummaries = Array.isArray(animaState?.items) ? animaState.items : [];
+    renderAnima();
+  };
+
+  const horaeStatusText = () => {
+    const compressedCount = horaeMemories.filter(item => item.horaeCompressed).length;
+    const legacySummaryCount = memories.filter(isLegacyHoraeSummaryMemory).length;
+    if (horaeState?.status === 'no_chat') return '当前没有打开聊天，暂时无法读取 Horae 记忆。';
+    if (horaeState?.status === 'horae_missing') return '未检测到 Horae 公开接口。请确认已安装并启用 Horae 1.15.1 或更高版本。';
+    if (horaeState?.status === 'error') return `读取 Horae 记忆失败：${horaeState?.error || '未知错误'}`;
+    if (horaeState?.status === 'empty' || horaeState?.status === 'empty_disabled') return `Horae${horaeState?.version ? ` ${horaeState.version}` : ''} 当前没有可读取的原始时间线事件。`;
+    const disabled = horaeState?.enabled === false ? ' · Horae 当前关闭，但仍可读取已保存数据' : '';
+    const legacy = legacySummaryCount ? ` · MP 保留 ${legacySummaryCount} 条旧版压缩摘要` : '';
+    return `Horae${horaeState?.version ? ` ${horaeState.version}` : ''} · ${horaeMemories.length} 条原始事件 · 其中 ${compressedCount} 条已被 Horae 压缩隐藏${legacy}${disabled}`;
+  };
+
+  const horaeToMemory = (item, priority = 'medium') => ({
+    id: gid(),
+    event: item.event || 'Horae时间线事件',
+    primaryKeywords: uniq(item.primaryKeywords || []),
+    secondaryKeywords: [],
+    entityKeywords: uniq(item.entityKeywords || []),
+    summary: item.summary || '',
+    timeLabel: item.timeLabel || '',
+    timeValue: parseTimeValue(item.timeLabel || ''),
+    floorRange: Array.isArray(item.floorRange) ? item.floorRange : null,
+    priority,
+    source: 'horae_memory',
+    horaeMemoryId: item.horaeMemoryId,
+    horaeKind: item.horaeKind,
+    horaeSummaryId: item.horaeSummaryId || '',
+    horaeEventKey: item.horaeEventKey || '',
+    horaeLevel: item.horaeLevel || '',
+    horaeVersion: item.horaeVersion || horaeState?.version || '',
+    horaeCompressedAtImport: !!item.horaeCompressed,
+    timestamp: item.timestamp || Date.now(),
+    keywordSource: 'horae_auto'
+  });
+
+  const legacyHoraeCoverageFor = item => findLegacyHoraeCoverage(memories, item);
+
+  const horaeImportState = (item, imported = null) => {
+    const exactMap = imported || new Map(memories.filter(memory => memory.horaeMemoryId).map(memory => [String(memory.horaeMemoryId), memory]));
+    const exact = exactMap.get(String(item?.horaeMemoryId || '')) || null;
+    const coveredBy = exact ? null : legacyHoraeCoverageFor(item);
+    return { exact, coveredBy, memory: exact || coveredBy };
+  };
+
+  const renderHorae = () => {
+    const status = $('mp_hst');
+    const list = $('mp_hl');
+    const tabCount = $('mp_horae_tab_count');
+    if (!status || !list) return;
+    if (tabCount) tabCount.textContent = String(horaeMemories.length);
+    status.textContent = horaeStatusText();
+
+    const imported = new Map(memories.filter(m => m.horaeMemoryId).map(m => [String(m.horaeMemoryId), m]));
+    const query = ($('mp_hs')?.value || '').trim().toLowerCase();
+    const kind = $('mp_hkind')?.value || '';
+    const mode = $('mp_hmp')?.value || '';
+    const filtered = horaeMemories.filter(item => {
+      const { memory } = horaeImportState(item, imported);
+      if (kind === 'active' && item.horaeCompressed) return false;
+      if (kind === 'compressed' && !item.horaeCompressed) return false;
+      if (mode === 'unimported' && memory) return false;
+      if ((mode === 'high' || mode === 'medium' || mode === 'low') && (!memory || (memory.priority || 'medium') !== mode)) return false;
+      if (query && ![item.event, item.summary, item.timeLabel, ...(item.primaryKeywords || []), ...(item.entityKeywords || [])].join(' ').toLowerCase().includes(query)) return false;
+      return true;
+    });
+
+    if (!horaeMemories.length) {
+      list.innerHTML = '<div class="emp">暂无可读取的 Horae 原始事件</div>';
+      return;
+    }
+    if (!filtered.length) {
+      list.innerHTML = '<div class="emp">无匹配记忆</div>';
+      return;
+    }
+
+    list.innerHTML = filtered.map(item => {
+      const { exact: memory, coveredBy } = horaeImportState(item, imported);
+      const itemIndex = horaeMemories.indexOf(item);
+      const currentPriority = memory?.priority || 'medium';
+      const range = Array.isArray(item.floorRange) ? `#${item.floorRange[0]}-${item.floorRange[1]}` : '楼层未知';
+      const kindLabel = item.horaeCompressed ? '原始事件 · 已被Horae压缩' : '原始事件 · 尚未压缩';
+      const priorityButton = (value, label) => `<button class="btn ${memory && currentPriority === value ? 'bp1' : (!memory && value === 'medium' ? 'bp1' : '')}" ${memory && currentPriority === value ? 'disabled aria-current="true"' : ''} onclick="window._mpHI(${itemIndex},'${value}')">${memory && currentPriority === value ? '当前：' : ''}${label}${memory ? '' : '导入'}</button>`;
+      const primary = (item.primaryKeywords || []).map(tag => `<span class="kw">${h(tag)}</span>`).join('');
+      const entities = (item.entityKeywords || []).map(tag => `<span class="kw ke">${h(tag)}</span>`).join('');
+      const actions = coveredBy
+        ? '<span class="bp bpi">旧版压缩摘要已覆盖</span>'
+        : `${memory ? '<span class="bp bpi">已导入</span>' : ''}${priorityButton('high','常驻')}${priorityButton('medium','主要触发')}${priorityButton('low','次级触发')}${memory ? `<button class="btn bd1" onclick="window._mpD_horae(${itemIndex})">移除</button>` : ''}`;
+      return `<div class="xi"><div class="mh"><span class="xt">${h(item.event)}</span><span class="ht">${h(kindLabel)} · ${h(item.horaeLevel || '')}</span></div><div class="ht">${h(item.timeLabel || '')}${item.timeLabel ? ' · ' : ''}${h(range)}</div><div class="ms">${h(item.summary)}</div><div class="kr">${primary}${entities}</div><div class="ma">${actions}</div></div>`;
+    }).join('');
+  };
+
+  const refreshHorae = async () => {
+    horaeState = await loadCurrentHoraeMemories({ context: ctx });
+    horaeMemories = Array.isArray(horaeState?.items) ? horaeState.items : [];
+    renderHorae();
   };
 
   const stripMarkdownFences = (text) => {
@@ -1807,7 +2358,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       primaryKeywords: normArr(obj.primaryKeywords, 6, true),
       secondaryKeywords: normArr(obj.secondaryKeywords, 6, true),
       entityKeywords: normArr(obj.entityKeywords && obj.entityKeywords.length ? obj.entityKeywords : mem.entityKeywords, 8, false),
-      keywordSource: 'xb_llm',
+      keywordSource: mem?.source === 'anima_summary' ? 'anima_llm' : (mem?.source === 'horae_memory' ? 'horae_llm' : 'xb_llm'),
       updatedAt: Date.now()
     };
   };
@@ -1852,11 +2403,11 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     const allowDelete = !!opts.allowDelete;
     const renderItem = (m, isPinned = false) => {
       const delBtn = allowDelete && m?.id ? `<button class="btn bd1" style="margin-left:8px;padding:2px 8px;font-size:11px" onclick="window._mpD('${m.id}')">删除该记忆</button>` : '';
-      return `<div class="rc"><div class="me">${isPinned ? '[置顶] ' : ''}${h(m.event || '(无事件名)')}${delBtn}</div><div class="ms">${h(m.summary || '')}</div>${showReason && m._reason ? `<div class="rl">${h(m._reason)}</div>` : ''}</div>`;
+      return `<div class="rc"><div class="me">${isPinned ? '[常驻] ' : ''}${h(m.event || '(无事件名)')}${delBtn}</div><div class="ms">${h(m.summary || '')}</div>${showReason && m._reason ? `<div class="rl">${h(m._reason)}</div>` : ''}</div>`;
     };
     let html = `<div class="ht" style="margin-bottom:6px;color:${tone}">${h(title)}</div>`;
     if (pinned.length) {
-      html += '<div class="ht" style="margin-bottom:6px;color:#f87171">置顶记忆</div>';
+      html += '<div class="ht" style="margin-bottom:6px;color:#f87171">常驻记忆</div>';
       html += pinned.map(m => renderItem(m, true)).join('');
     }
     if (triggered.length) {
@@ -1897,24 +2448,169 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     }
   };
 
-  renderList();renderXb();
+  renderList();renderXb();renderAnima();renderHorae();
+
+  const loadAutoCfg = () => window.MemoryPilot?.loadAutoSummaryConfig?.() || { enabled:false, interval:20, startFloor:1, priorityMode:'fixed', fixedPriority:'medium', hideSummarized:false, keepRecent:6 };
+  const loadAutoState = () => window.MemoryPilot?.loadAutoSummaryState?.() || { nextFloor:1, completedThrough:0, paused:false, running:false, lastStatus:'尚未开始自动总结。', lastError:'' };
+  const syncAutoConditionalFields = () => {
+    if ($('mp_auto_fixed_wrap')) $('mp_auto_fixed_wrap').style.display = $('mp_auto_priority_mode')?.value === 'ai' ? 'none' : '';
+    if ($('mp_auto_keep_wrap')) $('mp_auto_keep_wrap').style.display = $('mp_auto_hide')?.checked ? '' : 'none';
+  };
+  const renderAutoSummaryControls = (fill = false) => {
+    const cfg = loadAutoCfg();
+    const state = loadAutoState();
+    if (fill) {
+      $('mp_auto_enabled').checked = !!cfg.enabled;
+      $('mp_auto_interval').value = String(cfg.interval || 20);
+      $('mp_auto_start').value = String(cfg.startFloor || 1);
+      $('mp_auto_priority_mode').value = cfg.priorityMode === 'ai' ? 'ai' : 'fixed';
+      $('mp_auto_fixed').value = cfg.fixedPriority || 'medium';
+      $('mp_auto_hide').checked = !!cfg.hideSummarized;
+      $('mp_auto_keep').value = String(cfg.keepRecent ?? 6);
+    }
+    syncAutoConditionalFields();
+    const nextStart = Number(state.nextFloor || cfg.startFloor || 1);
+    const nextEnd = nextStart + Number(cfg.interval || 20) - 1;
+    const missing = Math.max(0, nextEnd - chat.length);
+    const nextText = missing
+      ? `下一段：#${nextStart}-${nextEnd}（还差 ${missing} 楼）`
+      : `下一段：#${nextStart}-${nextEnd}（将在下一次 AI 回复后执行）`;
+    const status = $('mp_auto_status');
+    if (status) {
+      status.classList.toggle('err', !!state.paused);
+      const prefix = !cfg.enabled ? '自动总结当前关闭。' : (state.running ? '自动总结正在运行。' : String(state.lastStatus || '尚未开始自动总结。'));
+      status.textContent = `${prefix} ${nextText}`;
+    }
+    if ($('mp_auto_retry')) $('mp_auto_retry').style.display = state.paused ? '' : 'none';
+    if ($('mp_auto_retry')) $('mp_auto_retry').disabled = !!state.running;
+    if ($('mp_auto_save')) $('mp_auto_save').disabled = !!state.running;
+  };
+  renderAutoSummaryControls(true);
+  $('mp_auto_priority_mode').onchange = syncAutoConditionalFields;
+  $('mp_auto_hide').onchange = syncAutoConditionalFields;
+  $('mp_auto_save').onclick = async () => {
+    const previous = loadAutoCfg();
+    const startFloor = Math.max(1, Math.round(Number($('mp_auto_start').value) || 1));
+    if (startFloor !== previous.startFloor && loadAutoState().completedThrough >= previous.startFloor) {
+      if (!confirm(`将开始总结楼层改为第 ${startFloor} 楼，会重置自动总结进度。继续吗？`)) return;
+    }
+    $('mp_auto_save').disabled = true;
+    try {
+      await window.MemoryPilot?.saveAutoSummaryConfig?.({
+        enabled: !!$('mp_auto_enabled').checked,
+        interval: Math.max(2, Math.min(200, Math.round(Number($('mp_auto_interval').value) || 20))),
+        startFloor,
+        priorityMode: $('mp_auto_priority_mode').value === 'ai' ? 'ai' : 'fixed',
+        fixedPriority: $('mp_auto_fixed').value || 'medium',
+        hideSummarized: !!$('mp_auto_hide').checked,
+        keepRecent: Math.max(0, Math.min(200, Math.round(Number($('mp_auto_keep').value) || 0))),
+      });
+      renderAutoSummaryControls(true);
+      toastr?.success?.('自动总结设置已保存');
+    } catch (error) {
+      toastr?.error?.('保存失败：' + (error?.message || error));
+    } finally {
+      $('mp_auto_save').disabled = false;
+    }
+  };
+  $('mp_auto_retry').onclick = async () => {
+    $('mp_auto_retry').disabled = true;
+    renderAutoSummaryControls(false);
+    try { await window.MemoryPilot?.retryAutoSummary?.(); }
+    finally { renderAutoSummaryControls(true); }
+  };
+  if (window._mpAutoStateListener) window.removeEventListener('memorypilot:auto-summary-state', window._mpAutoStateListener);
+  window._mpAutoStateListener = async () => {
+    try { memories = dedupeMemories(await loadMemories()); renderList(); }
+    catch {}
+    renderAutoSummaryControls(false);
+  };
+  window.addEventListener('memorypilot:auto-summary-state', window._mpAutoStateListener);
+
   // Filter listeners
+  const filterLabels = {
+    all: '全部记忆',
+    high: '常驻',
+    medium: '主要触发',
+    low: '次级触发',
+  };
   root.querySelectorAll('[data-mf]').forEach(btn => {
     btn.onclick = () => {
-      root.querySelectorAll('.ftab').forEach(b => b.classList.remove('on'));
+      root.querySelectorAll('.ftab,.st').forEach(b => b.classList.remove('on'));
       btn.classList.add('on');
       _listFilter = btn.getAttribute('data-mf');
+      $('mp_filter_label').textContent = filterLabels[_listFilter] || '全部记忆';
       renderList();
     };
   });
+  root.querySelectorAll('[data-merge-kw-mode]').forEach(btn => {
+    btn.onclick = () => {
+      const mode = btn.getAttribute('data-merge-kw-mode') || 'default';
+      $('mp_merge_kw_mode').value = mode;
+      root.querySelectorAll('[data-merge-kw-mode]').forEach(item => {
+        const active = item === btn;
+        item.classList.toggle('on', active);
+        item.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    };
+  });
   $('mp_f_search').oninput = () => { _listSearch = $('mp_f_search').value.trim(); searchCursor = -1; renderList(); };
+  $('mp_multi_toggle').onclick = () => setMultiSelectMode(!multiSelectMode);
+  $('mp_select_all').onclick = () => selectMemoryBatch(
+    () => true,
+    count => `已选择全部 ${count} 条记忆`,
+    '当前没有可选择的记忆'
+  );
+  $('mp_select_xball').onclick = () => {
+    selectMemoryBatch(
+      m => m.source === 'xb_event',
+      count => `已选择全部 ${count} 条小白X总结`,
+      '当前没有小白X总结'
+    );
+  };
+  $('mp_select_xbnr').onclick = () => {
+    selectMemoryBatch(
+      m => m.source === 'xb_event' && m.keywordSource !== 'xb_llm',
+      count => `已选择 ${count} 条未重构小白X总结`,
+      '当前没有未重构的小白X总结'
+    );
+  };
+  $('mp_select_animaall').onclick = () => {
+    selectMemoryBatch(
+      m => m.source === 'anima_summary',
+      count => `已选择全部 ${count} 条 Anima 总结`,
+      '当前没有 Anima 总结'
+    );
+  };
+  $('mp_select_animanr').onclick = () => {
+    selectMemoryBatch(
+      m => m.source === 'anima_summary' && m.keywordSource !== 'anima_llm',
+      count => `已选择 ${count} 条未重构 Anima 总结`,
+      '当前没有未重构的 Anima 总结'
+    );
+  };
+  $('mp_select_horaeall').onclick = () => {
+    selectMemoryBatch(
+      m => m.source === 'horae_memory',
+      count => `已选择全部 ${count} 条 Horae 记忆`,
+      '当前没有 Horae 记忆'
+    );
+  };
+  $('mp_select_horaenr').onclick = () => {
+    selectMemoryBatch(
+      m => m.source === 'horae_memory' && m.keywordSource !== 'horae_llm',
+      count => `已选择 ${count} 条未重构 Horae 记忆`,
+      '当前没有未重构的 Horae 记忆'
+    );
+  };
   window._mpJump = (id) => {
     _listSearch = '';
     _listFilter = 'all';
     searchCursor = -1;
     if ($('mp_f_search')) $('mp_f_search').value = '';
-    root.querySelectorAll('.ftab').forEach(b => b.classList.remove('on'));
+    root.querySelectorAll('.ftab,.st').forEach(b => b.classList.remove('on'));
     root.querySelector('[data-mf="all"]')?.classList.add('on');
+    if ($('mp_filter_label')) $('mp_filter_label').textContent = '全部记忆';
     activateTab('list');
     renderList();
     requestAnimationFrame(() => scrollToListItem(id));
@@ -1932,6 +2628,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       toastr?.info?.('操作仍在后台运行，完成后可重新打开面板查看结果');
       return;
     }
+    if(window._mpAnimaSummaryListener) document.removeEventListener('anima_summary_written',window._mpAnimaSummaryListener);
     $(P)?.remove();$(S)?.remove();
   };
   $('mp_cls').onclick=close;
@@ -1947,10 +2644,21 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     if (auto) markGuideSeen();
   };
   const hideGuide = () => $('mp_guide')?.classList.remove('on');
-  $('mp_open_guide').onclick = () => showGuide(false);
+  $('mp_help').onclick = () => showGuide(false);
   $('mp_guide_ok').onclick = () => { markGuideSeen(); hideGuide(); };
-  $('mp_guide_later').onclick = () => { markGuideSeen(); hideGuide(); };
   $('mp_guide_mask').onclick = () => { markGuideSeen(); hideGuide(); };
+  $('mp_copy_inject').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(RECALL_INJECT_PROMPT);
+      toastr?.success?.('记忆注入 Prompt 已复制');
+    } catch {
+      const input = $('mp_inject_prompt');
+      input?.focus();
+      input?.select();
+      try { document.execCommand('copy'); toastr?.success?.('记忆注入 Prompt 已复制'); }
+      catch { toastr?.warning?.('复制失败，请长按文本框手动复制'); }
+    }
+  };
   root.querySelectorAll('[data-guide-tab]').forEach(btn => {
     btn.onclick = () => {
       markGuideSeen();
@@ -1968,22 +2676,10 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       if (action === 'monitor') window.MemoryPilot?.openMonitor?.();
     };
   });
-  try {
-    const seen = localStorage.getItem('mp_onboarding_seen_v1') === '1' || _getGlobalStore().onboardingSeenV1 === true;
-    if (!seen) setTimeout(() => showGuide(true), 150);
-  } catch {}
-
   root.querySelectorAll('.tab').forEach(t=>{t.onclick=()=>{
     activateTab(t.dataset.t);
   };});
-  root.querySelector('[data-hub="monitor"]')?.addEventListener('click', () => window.MemoryPilot?.openMonitor?.());
-  root.querySelector('[data-hub="settings"]')?.addEventListener('click', () => window.MemoryPilot?.openApiConfig?.());
-  root.querySelector('[data-hub="memory"]')?.addEventListener('click', () => {
-    root.querySelectorAll('[data-hub]').forEach(b => b.classList.remove('on'));
-    root.querySelector('[data-hub="memory"]')?.classList.add('on');
-    activateTab('list');
-  });
-  $('mp_help')?.addEventListener('click', () => showGuide(false));
+  if (['list', 'add', 'xb', 'anima', 'horae', 'batch', 'cfg'].includes(initialTab)) activateTab(initialTab);
 
   $('mp_sv').onclick=async()=>{
     const ev=$('mp_fe').value.trim();
@@ -2016,6 +2712,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       await saveMem(memories);
       renderList();
       renderXb();
+      renderAnima();
+      renderHorae();
       clearForm(false);
       root.querySelector('.tab[data-t="list"]').click();
       requestAnimationFrame(() => {
@@ -2052,6 +2750,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       await saveMem(memories);
       renderList();
       renderXb();
+      renderAnima();
+      renderHorae();
       showDeleteUndo(removed);
       toastr?.success?.('已删除');
     });
@@ -2106,7 +2806,122 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     });
   };
 
-  $('mp_xs').oninput=renderXb;$('mp_xty').onchange=renderXb;$('mp_xwt').onchange=renderXb;
+  $('mp_xs').oninput=renderXb;$('mp_xty').onchange=renderXb;$('mp_xwt').onchange=renderXb;$('mp_xmp').onchange=renderXb;
+  $('mp_as').oninput=renderAnima;
+  $('mp_amp').onchange=renderAnima;
+  $('mp_anima_refresh').onclick=async()=>{
+    $('mp_anima_refresh').disabled=true;
+    $('mp_anima_refresh').textContent='读取中…';
+    try { await refreshAnima(); }
+    finally { $('mp_anima_refresh').disabled=false; $('mp_anima_refresh').textContent='重新读取'; }
+  };
+
+  window._mpAI=async(itemIndex,prio)=>{
+    const item=animaSummaries[Number(itemIndex)];
+    if(!item)return;
+    const animaSummaryId=item.animaSummaryId;
+    await withLock('anima_import_'+animaSummaryId,async()=>{
+      const existing=memories.find(m=>String(m.animaSummaryId||'')===String(animaSummaryId));
+      const nextMem=existing?{...existing,priority:prio,updatedAt:Date.now()}:animaToMemory(item,prio);
+      memories=upsertMemory(memories,nextMem);
+      await saveMem(memories);
+      renderList();renderAnima();
+      toastr?.success?.(existing?'已更新召回类型':'已导入 Anima 总结');
+    });
+  };
+
+  window._mpD_anima=async(itemIndex)=>{
+    const item=animaSummaries[Number(itemIndex)];
+    if(!item)return;
+    const animaSummaryId=item.animaSummaryId;
+    if(!confirm('从 MemoryPilot 记忆列表移除此 Anima 总结？\n\n不会删除 Anima 世界书中的原始总结。'))return;
+    await withLock('anima_del_'+animaSummaryId,async()=>{
+      memories=memories.filter(m=>String(m.animaSummaryId||'')!==String(animaSummaryId));
+      await saveMem(memories);
+      renderList();renderAnima();
+      toastr?.success?.('已从记忆列表移除');
+    });
+  };
+
+  $('mp_anima_import_all').onclick=async()=>{
+    const imported=new Set(memories.filter(m=>m.animaSummaryId).map(m=>String(m.animaSummaryId)));
+    const pending=animaSummaries.filter(item=>!imported.has(String(item.animaSummaryId)));
+    if(!pending.length){toastr?.info?.('没有未导入的 Anima 总结');return;}
+    if(!confirm(`将 ${pending.length} 条 Anima 总结按“主要触发”导入 MemoryPilot，继续吗？`))return;
+    await withLock('anima_import_all',async()=>{
+      for(const item of pending) memories=upsertMemory(memories,animaToMemory(item,'medium'));
+      await saveMem(memories);
+      renderList();renderAnima();
+      toastr?.success?.(`已导入 ${pending.length} 条 Anima 总结`);
+    });
+  };
+
+  if(window._mpAnimaSummaryListener) document.removeEventListener('anima_summary_written',window._mpAnimaSummaryListener);
+  window._mpAnimaSummaryListener=()=>{ if(document.getElementById(P)) refreshAnima(); };
+  document.addEventListener('anima_summary_written',window._mpAnimaSummaryListener);
+
+  $('mp_hs').oninput=renderHorae;
+  $('mp_hkind').onchange=renderHorae;
+  $('mp_hmp').onchange=renderHorae;
+  $('mp_horae_refresh').onclick=async()=>{
+    $('mp_horae_refresh').disabled=true;
+    $('mp_horae_refresh').textContent='读取中…';
+    try { await refreshHorae(); }
+    finally { $('mp_horae_refresh').disabled=false; $('mp_horae_refresh').textContent='重新读取'; }
+  };
+
+  window._mpHI=async(itemIndex,prio)=>{
+    const item=horaeMemories[Number(itemIndex)];
+    if(!item)return;
+    const horaeMemoryId=item.horaeMemoryId;
+    await withLock('horae_import_'+horaeMemoryId,async()=>{
+      const existing=memories.find(m=>String(m.horaeMemoryId||'')===String(horaeMemoryId));
+      const coveredBy=existing?null:legacyHoraeCoverageFor(item);
+      if(coveredBy){
+        toastr?.info?.('该楼层已由旧版 Horae 压缩摘要覆盖，不会重复导入');
+        return;
+      }
+      // 已导入的条目只修改召回类型；重新读取 Horae 不会回写正文、
+      // 时间或楼层，避免外部重新分析改动 MemoryPilot 库存。
+      const nextMem=existing?{
+        ...existing,
+        priority:prio,
+        updatedAt:Date.now()
+      }:horaeToMemory(item,prio);
+      memories=upsertMemory(memories,nextMem);
+      await saveMem(memories);
+      renderList();renderHorae();
+      toastr?.success?.(existing?'已更新召回类型':'已导入 Horae 记忆');
+    });
+  };
+
+  window._mpD_horae=async(itemIndex)=>{
+    const item=horaeMemories[Number(itemIndex)];
+    if(!item)return;
+    const horaeMemoryId=item.horaeMemoryId;
+    if(!confirm('从 MemoryPilot 记忆列表移除此 Horae 记忆？\n\n不会删除 Horae 中的原始数据。'))return;
+    await withLock('horae_del_'+horaeMemoryId,async()=>{
+      memories=memories.filter(m=>String(m.horaeMemoryId||'')!==String(horaeMemoryId));
+      await saveMem(memories);
+      renderList();renderHorae();
+      toastr?.success?.('已从记忆列表移除');
+    });
+  };
+
+  $('mp_horae_import_all').onclick=async()=>{
+    const imported=new Map(memories.filter(memory=>memory.horaeMemoryId).map(memory=>[String(memory.horaeMemoryId),memory]));
+    const pending=horaeMemories.filter(item=>{
+      const state=horaeImportState(item,imported);
+      return !state.exact&&!state.coveredBy;
+    });
+    if(!pending.length){toastr?.info?.('当前没有未导入的 Horae 原始事件');return;}
+    await withLock('horae_import_all',async()=>{
+      for(const item of pending) memories=upsertMemory(memories,horaeToMemory(item,'medium'));
+      await saveMem(memories);
+      renderList();renderHorae();
+      toastr?.success?.(`已导入 ${pending.length} 条 Horae 原始事件`);
+    });
+  };
 
   window._mpXI=async(eid,prio)=>{
     const e=xbEvents.find(x=>String(x.id)===String(eid));if(!e)return;
@@ -2144,30 +2959,19 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   $('mp_bkb').onclick=()=>{
     const kw=$('mp_bk').value.trim();
-    if(!kw){$('mp_bkr').innerHTML='';$('mp_bk_status').textContent='';renderSearchContext(null);return;}
+    if(!kw){$('mp_bkr').innerHTML='';lastSearchResults=[];updateSearchStatus();renderSearchContext(null);return;}
     const results=searchFloors(kw);
     renderSearchResults(results);
   };
   $('mp_bkc').onclick=()=>{
     $('mp_bk').value='';
     $('mp_bkr').innerHTML='';
-    $('mp_bk_status').textContent='';
     searchPicked = new Set();
     lastSearchResults = [];
+    updateSearchStatus();
     renderSearchContext(null);
   };
-  $('mp_bk_fill_sel').onclick=()=>{
-    const nums=[...searchPicked].map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
-    if(!nums.length){toastr?.warning?.('请先勾选搜索结果或上下文楼层');return;}
-    $('mp_bf').value = nums.join(', ');
-    $('mp_bk_status').textContent = `已填入 ${nums.length} 层。`;
-  };
-  $('mp_bk_fill_rng').onclick=()=>{
-    const nums=[...searchPicked].map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
-    if(!nums.length){toastr?.warning?.('请先勾选搜索结果或上下文楼层');return;}
-    $('mp_bf').value = compressNums(nums);
-    $('mp_bk_status').textContent = `已按连续区间填入 ${nums.length} 层。`;
-  };
+  $('mp_bk_apply').onclick=applyPickedFloors;
   $('mp_bk_pick_all').onclick=()=>{
     searchPicked = new Set(lastSearchResults.map(r => r.floor + 1));
     renderSearchResults(lastSearchResults);
@@ -2180,7 +2984,19 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   $('mp_mps').onclick=async()=>{await saveMergePrompt($('mp_mpr').value);toastr?.success?.('合并 Prompt 已保存');};
   $('mp_mpd').onclick=async()=>{$('mp_mpr').value=DEF_MERGE_PROMPT;await saveMergePrompt(DEF_MERGE_PROMPT);toastr?.success?.('已恢复默认');};
 
-  $('mp_merge_sel').onclick=async()=>{
+  $('mp_merge_open').onclick=()=>{
+    if(kwRunning){toastr?.warning?.('有操作正在进行');return;}
+    if(selectedIds.size < 2){toastr?.warning?.('请至少选择 2 条记忆进行合并');return;}
+    $('mp_merge_setup')?.classList.add('on');
+    $('mp_merge_status').textContent = `已选择 ${selectedIds.size} 条记忆。请确认它们属于同一事件或同一段连续情节，再设置合并方式。`;
+  };
+  $('mp_merge_setup_cancel').onclick=()=>{
+    if(kwRunning && kwRunningId === '__merge__'){toastr?.warning?.('合并正在进行，请先中止');return;}
+    $('mp_merge_setup')?.classList.remove('on');
+    $('mp_merge_status').textContent = '';
+  };
+
+  $('mp_merge_run').onclick=async()=>{
     if(kwRunning && kwRunningId === '__merge__' && kwAbort){
       kwAbort.abort();
       $('mp_merge_status').textContent = '正在中止合并...';
@@ -2189,21 +3005,26 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     if(kwRunning){toastr?.warning?.('有操作正在进行');return;}
     const ids = [...selectedIds];
     if(ids.length < 2){toastr?.warning?.('请至少选择 2 条记忆进行合并');return;}
-    const mems = ids.map(id => memories.find(m => m.id === id)).filter(Boolean);
+    const mems = ids.map(id => memories.find(m => memoryId(m) === id)).filter(Boolean);
     if(mems.length < 2){toastr?.warning?.('有效记忆不足 2 条');return;}
     const priorities = new Set(mems.map(m => m.priority || 'medium'));
-    if(priorities.size > 1){toastr?.warning?.('只能合并同优先级的记忆（当前选择了: ' + [...priorities].join(', ') + '）');return;}
+    if(priorities.size > 1){
+      const labels = [...priorities].map(p => p === 'high' ? '常驻' : p === 'low' ? '次级触发' : '主要触发');
+      toastr?.warning?.('只能合并同优先级的记忆（当前选择了：' + labels.join('、') + '）');return;
+    }
     const prio = [...priorities][0];
     const kwMode = $('mp_merge_kw_mode')?.value || 'default';
     const hasFloor = mems.some(m => Array.isArray(m.floorRange) && m.floorRange.length >= 2);
     if(!hasFloor){ if(!confirm('选中的记忆都没有楼层范围信息，合并时将无法参考原文。是否继续？')) return; }
     const useCtx = !!$('mp_merge_ctx')?.checked;
-    if(!confirm('将合并 ' + mems.length + ' 条 [' + prio + '] 记忆为 1 条。\n关键词模式：' + (kwMode === 'ai' ? 'AI重构' : '默认合并') + '\n关联原文：' + (useCtx ? '是' : '否') + '\n继续？')) return;
+    const prioLabel = prio === 'high' ? '常驻' : prio === 'low' ? '次级触发' : '主要触发';
+    const prioClass = prio === 'high' ? 'bph' : prio === 'low' ? 'bpl' : 'bpm';
+    if(!confirm('将合并 ' + mems.length + ' 条 [' + prioLabel + '] 记忆为 1 条。\n请确认它们属于同一事件或同一段连续情节；系统不会自动拆分多个事件。\n关键词模式：' + (kwMode === 'ai' ? 'AI 重新生成' : '汇总原关键词') + '\n合并时参考原文：' + (useCtx ? '是' : '否') + '\n继续？')) return;
     kwAbort = new AbortController();
     kwRunning = true;
     kwRunningId = '__merge__';
     $('mp_merge_status').textContent = '正在合并...';
-    $('mp_merge_sel').textContent = '中止合并';
+    $('mp_merge_run').textContent = '中止合并';
     await savePendingOp('merge', { status:'running', message: mems.length + '条记忆' });
     try {
       const includeCtx = !!$('mp_merge_ctx')?.checked;
@@ -2214,20 +3035,20 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       let kws;
       if(kwMode === 'ai'){
         const kwPrompt = loadKwPrompt().replace('{{event}}', obj.event || '').replace('{{summary}}', obj.summary || '').replace('{{entities}}', (obj.entityKeywords || mems.flatMap(m => m.entityKeywords || [])).join(', ')).replace('{{timeLabel}}', obj.timeLabel || '').replace('{{floorRange}}', Array.isArray(obj.floorRange) ? '#' + obj.floorRange[0] + '-#' + obj.floorRange[1] : '未知');
-        $('mp_merge_status').textContent = '正在AI重构关键词...';
+        $('mp_merge_status').textContent = '正在由 AI 重新生成关键词...';
         const kwRaw = await callLLM(kwPrompt, kwAbort.signal);
         const kwObj = extractFirstJsonObject(kwRaw);
         kws = kwObj ? { primaryKeywords: uniq((kwObj.primaryKeywords || []).map(k => String(k||'').trim()).filter(Boolean)).slice(0,8), secondaryKeywords: uniq((kwObj.secondaryKeywords || []).map(k => String(k||'').trim()).filter(Boolean)).slice(0,8), entityKeywords: uniq((kwObj.entityKeywords || obj.entityKeywords || []).map(k => String(k||'').trim()).filter(Boolean)).slice(0,8) } : mergeKeywordsDefault(mems);
       } else { kws = mergeKeywordsDefault(mems); }
       const merged = { id: gid(), event: obj.event, summary: obj.summary, timeLabel: obj.timeLabel || mems[0].timeLabel || '', timeValue: Number.isFinite(Number(obj.timeValue)) ? Number(obj.timeValue) : (mems[0].timeValue || null), floorRange: (Array.isArray(obj.floorRange) && obj.floorRange.length >= 2) ? obj.floorRange : mergeFloorRange(mems), floorSegments: collectFloorSegments(mems), priority: prio, ...kws, source: 'merged', mergedFrom: ids, timestamp: Date.now() };
       kwRunning = false; kwRunningId = null; kwAbort = null;
-      $('mp_merge_sel').textContent = '合并选中事件';
-      { const _p=$(P); if(_p && _p.style.display==='none') { _p.style.display=''; toastr?.success?.('合并分析完成，请确认预览结果'); } }
+      $('mp_merge_run').textContent = '开始合并';
+      { const _p=$(P); if(_p && _p.style.display==='none') { _p.style.display=''; toastr?.success?.('合并处理完成，请确认预览结果'); } }
       const pkwH = (merged.primaryKeywords||[]).map(k=>'<span class="kw">'+h(k)+'</span>').join('');
       const skwH = (merged.secondaryKeywords||[]).map(k=>'<span class="kw kx">'+h(k)+'</span>').join('');
       const ekwH = (merged.entityKeywords||[]).map(k=>'<span class="kw ke">'+h(k)+'</span>').join('');
       const frH = formatFloorSegments(merged);
-      $('mp_merge_status').innerHTML = '<div class="mi" style="border-color:rgba(124,107,240,0.4)"><div class="mh"><span class="me">[预览] '+h(merged.event)+'</span><span class="bp bpm">'+h(prio)+'</span></div>'+(merged.timeLabel?'<div class="ht">'+h(merged.timeLabel)+(frH?' | '+frH:'')+'</div>':'')+'<div class="ms">'+h(merged.summary)+'</div><div class="kr">'+pkwH+skwH+ekwH+'</div><div class="ma" style="margin-top:8px"><button class="btn bp1" id="mp_merge_confirm">确认合并（删除原记忆）</button><button class="btn bd1" id="mp_merge_cancel">放弃</button></div></div>';
+      $('mp_merge_status').innerHTML = '<div class="mi" style="border-color:rgba(124,107,240,0.4)"><div class="mh"><span class="me">[预览] '+h(merged.event)+'</span><span class="bp '+prioClass+'">'+h(prioLabel)+'</span></div>'+(merged.timeLabel?'<div class="ht">'+h(merged.timeLabel)+(frH?' | '+frH:'')+'</div>':'')+'<div class="ms">'+h(merged.summary)+'</div><div class="kr">'+pkwH+skwH+ekwH+'</div><div class="ma" style="margin-top:8px"><button class="btn bp1" id="mp_merge_confirm">确认合并（删除原记忆）</button><button class="btn bd1" id="mp_merge_cancel">放弃</button></div></div>';
       await savePendingOp('merge', { status:'done', message: merged.event, results: [merged] });
       window._mpMergePreview = { merged: merged, sourceIds: ids };
       const confirmBtn = document.getElementById('mp_merge_confirm');
@@ -2239,10 +3060,10 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
           try {
             const preview = window._mpMergePreview;
             if (!preview) { toastr?.warning?.('预览数据丢失'); return; }
-            window._mpMergeUndo = { deletedMems: preview.sourceIds.map(id => memories.find(m => m.id === id)).filter(Boolean), mergedId: preview.merged.id };
-            for (const id of preview.sourceIds) { memories = memories.filter(m => m.id !== id); }
+            window._mpMergeUndo = { deletedMems: preview.sourceIds.map(id => memories.find(m => memoryId(m) === id)).filter(Boolean), mergedId: preview.merged.id };
+            for (const id of preview.sourceIds) { memories = memories.filter(m => memoryId(m) !== id); }
             memories = upsertMemory(memories, preview.merged);
-            await saveMem(memories); selectedIds = new Set(); renderList(); renderXb();
+            await saveMem(memories); selectedIds = new Set(); renderList(); renderXb(); renderAnima(); renderHorae();
             $('mp_merge_status').innerHTML = '<div class="ht" style="color:#4ade80">合并完成：'+h(preview.merged.event)+' <button class="btn bd1" id="mp_merge_undo" style="margin-left:8px;padding:2px 8px;font-size:11px">撤回合并</button></div>';
             const undoBtn = document.getElementById('mp_merge_undo');
             if(undoBtn) { undoBtn.addEventListener('click', async function onUndo() {
@@ -2250,7 +3071,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
               const undo = window._mpMergeUndo;
               if (!undo) { toastr?.warning?.('没有可撤回的合并'); return; }
               undoBtn.disabled = true; undoBtn.textContent = '正在撤回...';
-              try { memories = memories.filter(m => m.id !== undo.mergedId); for (const m of undo.deletedMems) { memories = upsertMemory(memories, m); } await saveMem(memories); selectedIds = new Set(); window._mpMergeUndo = null; window._mpMergePreview = null; renderList(); renderXb(); $('mp_merge_status').textContent = '合并已撤回，原记忆已恢复。'; toastr?.success?.('合并已撤回'); }
+              try { memories = memories.filter(m => m.id !== undo.mergedId); for (const m of undo.deletedMems) { memories = upsertMemory(memories, m); } await saveMem(memories); selectedIds = new Set(); window._mpMergeUndo = null; window._mpMergePreview = null; renderList(); renderXb(); renderAnima(); renderHorae(); $('mp_merge_status').textContent = '合并已撤回，原记忆已恢复。'; toastr?.success?.('合并已撤回'); }
               catch(ue) { toastr?.error?.('撤回失败：'+(ue?.message||ue)); undoBtn.disabled = false; undoBtn.textContent = '撤回合并'; }
             }); }
             window._mpMergePreview = null; toastr?.success?.('已合并 '+preview.sourceIds.length+' 条记忆');
@@ -2261,45 +3082,31 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     } catch(e) {
       if(e?.name === 'AbortError'){ $('mp_merge_status').textContent = '合并已中止'; toastr?.warning?.('已中止'); await savePendingOp('merge',{status:'error',error:'手动中止'}); }
       else { $('mp_merge_status').textContent = '合并失败：'+(e?.message||e); toastr?.error?.('合并失败：'+(e?.message||e)); await savePendingOp('merge',{status:'error',error:e?.message||String(e)}); }
-      kwRunning = false; kwRunningId = null; kwAbort = null; $('mp_merge_sel').textContent = '合并选中事件';
+      kwRunning = false; kwRunningId = null; kwAbort = null; $('mp_merge_run').textContent = '开始合并';
     }
   };
 
-  $('mp_kps').onclick=async()=>{await saveKwPrompt($('mp_kpr').value);toastr?.success?.('XB关键词重构 Prompt 已保存');};
+  $('mp_kps').onclick=async()=>{await saveKwPrompt($('mp_kpr').value);toastr?.success?.('重构关键词 Prompt 已保存');};
   $('mp_kpd').onclick=async()=>{$('mp_kpr').value=DEF_KW_PROMPT;await saveKwPrompt(DEF_KW_PROMPT);toastr?.success?.('已恢复默认');};
 
-  $('mp_sel_xb').onclick=()=>{
-    selectedIds = new Set(memories.filter(m=>m.source==='xb_event').map(m=>m.id));
-    renderList();
-  };
-  $('mp_sel_xbnr').onclick=()=>{
-    selectedIds = new Set(memories.filter(m=>m.source==='xb_event'&&m.keywordSource!=='xb_llm').map(m=>m.id));
-    renderList();
-    toastr?.success?.(`已选 ${selectedIds.size} 条未重构XB记忆`);
-  };
   $('mp_sel_none').onclick=()=>{
     selectedIds = new Set();
-    searchPicked = new Set();
-    lastSearchResults = [];
     renderList();
   };
-  $('mp_edit_sel').onclick=()=>{
-    const ids = [...selectedIds].filter(id => memories.some(m => m.id === id));
-    if (ids.length !== 1) { toastr?.warning?.('请选择 1 条记忆进行编辑'); return; }
-    window._mpE(ids[0]);
-  };
   $('mp_del_sel').onclick=async()=>{
-    const ids = [...selectedIds].filter(id => memories.some(m => m.id === id));
+    const ids = [...selectedIds].filter(id => memories.some(m => memoryId(m) === id));
     if (!ids.length) { toastr?.warning?.('请先选择要删除的记忆'); return; }
     if (!confirm(`删除选中的 ${ids.length} 条记忆？`)) return;
     await withLock('delete_selected', async () => {
       const doomed = new Set(ids);
-      const removed = makeDeleteSnapshot(m => doomed.has(m.id));
-      memories = memories.filter(m => !doomed.has(m.id));
+      const removed = makeDeleteSnapshot(m => doomed.has(memoryId(m)));
+      memories = memories.filter(m => !doomed.has(memoryId(m)));
       selectedIds = new Set();
       await saveMem(memories);
       renderList();
       renderXb();
+      renderAnima();
+      renderHorae();
       showDeleteUndo(removed);
       toastr?.success?.(`已删除 ${ids.length} 条记忆`);
     });
@@ -2308,7 +3115,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   window._mpKR=async(id)=>{
     const mem = memories.find(x=>x.id===id);
     if(!mem) return;
-    if(mem.source!=='xb_event'){toastr?.warning?.('仅支持 XB 事件');return;}
+    if(!isRebuildableMemory(mem)){toastr?.warning?.('仅支持小白X总结、Anima总结或Horae记忆');return;}
     if(kwRunning && kwRunningId===id && kwAbort){
       kwAbort.abort();
       $('mp_kw_status').textContent = `正在中止：${mem.event}`;
@@ -2328,6 +3135,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         await saveMem(memories);
         renderList();
         renderXb();
+        renderAnima();
+        renderHorae();
       });
       $('mp_kw_status').textContent = `已完成：${mem.event}`;
       toastr?.success?.('关键词已重构');
@@ -2354,9 +3163,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       $('mp_kw_status').textContent = '正在中止批量重构...';
       return;
     }
-    const ids = [...selectedIds].filter(id => memories.some(m => m.id===id && m.source==='xb_event'));
-    if(!ids.length){toastr?.warning?.('请先勾选 XB 记忆');return;}
-    if(!confirm(`将使用当前 Prompt 和分析 API，批量重构 ${ids.length} 条 XB 记忆关键词，继续吗？`)) return;
+    const ids = [...selectedIds].filter(id => memories.some(m => memoryId(m)===id && isRebuildableMemory(m)));
+    if(!ids.length){toastr?.warning?.('请先选择小白X总结、Anima总结或Horae记忆');return;}
+    if(!confirm(`将使用当前 Prompt 和总结 API，批量重构 ${ids.length} 条外部总结的关键词，继续吗？`)) return;
     kwAbort = new AbortController();
     kwRunning = true;
     kwRunningId = '__batch__';
@@ -2367,7 +3176,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       for (let idx = 0; idx < ids.length; idx++) {
         if (kwAbort.signal.aborted) throw new DOMException('Aborted', 'AbortError');
         const id = ids[idx];
-        const mem = memories.find(x=>x.id===id);
+        const mem = memories.find(x=>memoryId(x)===id);
         if(!mem) continue;
         $('mp_kw_status').textContent = `批量重构中 ${idx+1}/${ids.length}：${mem.event}`;
         if (idx % 3 === 0) { try { await savePendingOp('rebuild', { status:'running', message: (idx+1) + '/' + ids.length }); } catch {} }
@@ -2405,6 +3214,8 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       $('mp_rebuild_sel').textContent = '批量重构关键词';
       renderList();
       renderXb();
+      renderAnima();
+      renderHorae();
       { const _p=$(P); if(_p && _p.style.display==='none') { _p.style.display=''; } }
     }
   };
@@ -2413,7 +3224,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   $('mp_bpd').onclick=async()=>{$('mp_bpr').value=DEF_PROMPT;await savePrompt(DEF_PROMPT);toastr?.success?.('已恢复默认');};
 
   $('mp_rssv').onclick=async()=>{
-    await saveRecallCfg({every:Math.max(1,Math.round(Number($('mp_revery').value)||1)),alpha:Math.max(0,Math.min(0.95,(($('mp_ralpha').value?.trim?.()==='')?0.72:Number($('mp_ralpha').value)))),maxRecall:Math.max(1,Math.min(20,Number($('mp_rmaxn')?.value)||6)),contextWindow:Math.max(3,Math.min(30,Number($('mp_rctxwin')?.value)||8)),stickyTurns:Math.max(0,Math.min(20,Number($('mp_rsticky')?.value)??5))});
+    await saveRecallCfg({every:Math.max(1,Math.round(Number($('mp_revery').value)||1)),alpha:Math.max(0,Math.min(0.95,(($('mp_ralpha').value?.trim?.()==='')?0.72:Number($('mp_ralpha').value)))),maxRecall:Math.max(1,Math.min(20,Number($('mp_rmaxn')?.value)||6)),contextWindow:Math.max(3,Math.min(30,Number($('mp_rctxwin')?.value)||8)),stickyTurns:Math.max(0,Math.min(20,Number($('mp_rsticky')?.value)??5)),animaDedupe:!!$('mp_anima_dedupe')?.checked,xiaobaixDedupe:!!$('mp_xiaobaix_dedupe')?.checked});
     toastr?.success?.('召回设置已保存');
   };
 
@@ -2450,6 +3261,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         summaryPrompt: loadPrompt(),
         kwRebuildPrompt: loadKwPrompt(),
         mergePrompt: loadMergePrompt(),
+        autoSummary: loadAutoCfg(),
       };
       const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -2494,10 +3306,11 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       if (Array.isArray(data.blacklist)) { await saveBlacklist(data.blacklist); counts.push('黑名单'); }
       if (data.cleaner) { await saveCleaner(data.cleaner); counts.push('清洗规则'); }
       if (data.apiConfig && data.apiConfig.key) { await saveApi(data.apiConfig); counts.push('API配置'); }
-      if (data.summaryPrompt) { await savePrompt(data.summaryPrompt); counts.push('分析Prompt'); }
+      if (data.summaryPrompt) { await savePrompt(data.summaryPrompt); counts.push('总结 Prompt'); }
       if (data.kwRebuildPrompt) { await saveKwPrompt(data.kwRebuildPrompt); counts.push('重构Prompt'); }
       if (data.mergePrompt) { await saveMergePrompt(data.mergePrompt); counts.push('合并Prompt'); }
-      renderList(); renderXb();
+      if (data.autoSummary) { await window.MemoryPilot?.saveAutoSummaryConfig?.(data.autoSummary); counts.push('自动总结设置'); }
+      renderList(); renderXb(); renderAnima(); renderHorae();
       $('mp_io_status').textContent = '导入成功：' + counts.join('、');
       $('mp_io_status').style.color = '#4ade80';
       toastr?.success?.('导入完成');
@@ -2512,21 +3325,44 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   $('mp_cleanup_refresh').onclick = () => {
     const report = renderCleanupSummary();
-    setCleanupStatus('检测完成：' + (report?.summary || '未发现痕迹'));
+    setCleanupStatus(report?.hasChatLegacy || report?.hasLwbLegacy ? '检测完成：发现可清理的旧版数据。' : '检测完成：无需清理。');
+  };
+
+  const CURRENT_POINTER_KEYS = new Set(['version','chatKey','lastProcessedFloor','lastRecallTurn','storeMode']);
+  const CURRENT_INJECT_VARS = new Set(['mp_recall_pin','mp_recall_ctx']);
+  const inspectLegacyCleanup = () => {
+    const raw = window.MemoryPilot?.detectLegacyArtifacts?.() || {};
+    const ns = ctx?.chatMetadata?.extensions?.MemoryPilot || {};
+    const metadataKeys = Object.keys(ns).filter(key => !CURRENT_POINTER_KEYS.has(key));
+    const vars = ctx?.chatMetadata?.variables || {};
+    const variableKeys = Object.keys(vars).filter(key => String(key).startsWith('mp_') && !CURRENT_INJECT_VARS.has(key));
+    return {
+      metadataKeys,
+      variableKeys,
+      lwbCount: Number(raw.lwbSnapMpTraceCount || 0),
+      hasChatLegacy: metadataKeys.length > 0 || variableKeys.length > 0,
+      hasLwbLegacy: !!raw.lwbSnapHasMpTraces,
+    };
   };
 
   $('mp_cleanup_mp').onclick = async () => {
+    const report = inspectLegacyCleanup();
+    if (!report.hasChatLegacy) { toastr?.info?.('当前聊天没有需要清理的旧版数据'); return; }
+    if (!confirm('清理旧版聊天残留？\n\n只会移除检测到的旧版元数据和废弃变量，不会删除记忆列表、当前召回内容或小白X总结。建议先导出 MP 数据备份。')) return;
     try {
-      const res = await window.MemoryPilot?.cleanupLegacyArtifacts?.({
-        removeMpMetadata: true,
-        removeMpVariables: true,
-        removeLegacyLocalStorage: true,
-        removeLwbMpTraces: false,
-      });
+      const ns = ctx?.chatMetadata?.extensions?.MemoryPilot;
+      if (ns) report.metadataKeys.forEach(key => { delete ns[key]; });
+      const vars = ctx?.chatMetadata?.variables;
+      if (vars) report.variableKeys.forEach(key => { delete vars[key]; });
+      try {
+        if (typeof ctx.saveMetadata === 'function') await ctx.saveMetadata();
+        else if (typeof ctx.saveChatMetadata === 'function') await ctx.saveChatMetadata();
+        else if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+      } catch {}
       renderCleanupSummary();
-      const msg = `已清理旧 MP 痕迹：metadata=${res?.removedMpMetadata ? '1' : '0'}，变量=${res?.removedMpVariables?.length || 0}，localStorage=${res?.removedLocalStorage?.length || 0}`;
+      const msg = `旧版聊天残留已清理：元数据 ${report.metadataKeys.length} 项，变量 ${report.variableKeys.length} 项`;
       setCleanupStatus(msg, true);
-      toastr?.success?.('已清理当前聊天中的旧 MP 痕迹');
+      toastr?.success?.('旧版聊天残留已清理');
     } catch (e) {
       setCleanupStatus('清理失败：' + (e?.message || e), false);
       toastr?.error?.('清理失败');
@@ -2534,6 +3370,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   };
 
   $('mp_cleanup_lwb').onclick = async () => {
+    if (!confirm('清理小白X快照里的旧 MP 副本？\n\n只会移除小白X楼层快照中重复保存的 mp_* 变量，不会删除小白X总结或当前记忆列表。')) return;
     try {
       const res = await window.MemoryPilot?.cleanupLegacyArtifacts?.({
         removeMpMetadata: false,
@@ -2542,9 +3379,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         removeLwbMpTraces: true,
       });
       renderCleanupSummary();
-      const msg = `已清理 LWB 快照中的 MP 痕迹：vars=${res?.removedLwbSnapVars || 0}，空快照条目=${res?.prunedLwbSnapEntries || 0}`;
+      const msg = `小白X快照旧 MP 副本已清理：变量 ${res?.removedLwbSnapVars || 0} 项，空快照 ${res?.prunedLwbSnapEntries || 0} 项`;
       setCleanupStatus(msg, true);
-      toastr?.success?.('已清理 LWB 快照中的 MP 痕迹');
+      toastr?.success?.('小白X快照旧 MP 副本已清理');
     } catch (e) {
       setCleanupStatus('清理失败：' + (e?.message || e), false);
       toastr?.error?.('清理失败');
@@ -2553,35 +3390,68 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   let _abort=null;
 
-  // 批量分析结果渲染（复用于实时和恢复场景）
+  // 楼层总结结果渲染（复用于实时和恢复场景）
   const renderBatchResults = (nms) => {
     window._mpBM = dedupeMemories(nms);
-    $('mp_br').innerHTML=window._mpBM.map(m=>`<div class="mi"><div class="mh"><span class="me">${h(m.event)}</span><span class="bp ${m.priority==='high'?'bph':m.priority==='medium'?'bpm':'bpl'}">${h(m.priority||'medium')}</span></div><div class="ht">${h(m.timeLabel||'')}${Array.isArray(m.floorRange)?' | #'+h(m.floorRange[0])+'-'+h(m.floorRange[1]):''}</div><div class="ms">${h(m.summary)}</div><div class="kr">${((m.primaryKeywords||m.keywords||[])).map(k=>'<span class="kw">'+h(k)+'</span>').join('')}${(m.secondaryKeywords||[]).map(k=>'<span class="kw kx">'+h(k)+'</span>').join('')}${(m.entityKeywords||[]).map(k=>'<span class="kw ke">'+h(k)+'</span>').join('')}</div><div class="ma"><button class="btn bp1" onclick="window._mpBA('${m.id}','high')">置顶</button><button class="btn bp1" onclick="window._mpBA('${m.id}','medium')">普通</button><button class="btn" onclick="window._mpBA('${m.id}','low')">低</button></div></div>`).join('');
+    const priorityLabel = value => value === 'high' ? '常驻' : value === 'low' ? '次级触发' : '主要触发';
+    const priorityClass = value => value === 'high' ? 'bph' : value === 'low' ? 'bpl' : 'bpm';
+    const normalizeSuggested = value => value === 'high' || value === 'low' ? value : 'medium';
+    const pendingCount = window._mpBM.filter(m => !memories.some(item => String(item?.id || '') === String(m.id || ''))).length;
+    const batchAction = pendingCount
+      ? `<div class="batchresultactions"><button class="btn bp1" onclick="window._mpBAI()">一键按 AI 建议导入（${pendingCount} 条）</button></div>`
+      : '';
+    $('mp_br').innerHTML=batchAction+window._mpBM.map(m=>{
+      const suggested = normalizeSuggested(m.aiSuggestedPriority || m.priority || 'medium');
+      const imported = memories.find(item => String(item?.id || '') === String(m.id || ''));
+      const current = imported?.priority || null;
+      const button = (value, label) => {
+        if (current) return `<button class="btn ${current===value?'bp1':''}" ${current===value?'disabled aria-current="true"':''} onclick="window._mpBA('${m.id}','${value}')">${current===value?'当前：':''}${label}</button>`;
+        return `<button class="btn ${suggested===value?'bp1':''}" onclick="window._mpBA('${m.id}','${value}')">${label}导入</button>`;
+      };
+      return `<div class="mi"><div class="mh"><span class="me">${h(m.event)}</span><span class="bp ${priorityClass(suggested)}">AI 建议：${priorityLabel(suggested)}</span></div><div class="ht">${h(m.timeLabel||'')}${Array.isArray(m.floorRange)?' | #'+h(m.floorRange[0])+'-'+h(m.floorRange[1]):''}</div><div class="ms">${h(m.summary)}</div><div class="kr">${((m.primaryKeywords||m.keywords||[])).map(k=>'<span class="kw">'+h(k)+'</span>').join('')}${(m.secondaryKeywords||[]).map(k=>'<span class="kw kx">'+h(k)+'</span>').join('')}${(m.entityKeywords||[]).map(k=>'<span class="kw ke">'+h(k)+'</span>').join('')}</div><div class="ma">${current?'<span class="bp bpi">已导入</span>':''}${button('high','常驻')}${button('medium','主要触发')}${button('low','次级触发')}</div></div>`;
+    }).join('');
     window._mpBA=async(id,prio)=>{
       await withLock('batch_add_'+id, async () => {
         const m=window._mpBM.find(x=>x.id===id);if(!m)return;
-        const next = {...m, priority: prio};
+        const wasImported = memories.some(item => String(item?.id || '') === String(id));
+        const next = {...m, aiSuggestedPriority:m.aiSuggestedPriority||m.priority||'medium', priority: prio};
         memories = upsertMemory(memories, next);
         await saveMem(memories);
         renderList();
         renderXb();
-        toastr?.success?.('已添加');
+        renderBatchResults(window._mpBM);
+        toastr?.success?.(wasImported?'记忆类型已保存':'已加入记忆列表');
+      });
+    };
+    window._mpBAI=async()=>{
+      await withLock('batch_add_all_ai', async () => {
+        const pending = window._mpBM.filter(m => !memories.some(item => String(item?.id || '') === String(m.id || '')));
+        if (!pending.length) return;
+        for (const m of pending) {
+          const suggested = normalizeSuggested(m.aiSuggestedPriority || m.priority || 'medium');
+          memories = upsertMemory(memories, {...m, aiSuggestedPriority:suggested, priority:suggested});
+        }
+        await saveMem(memories);
+        renderList();
+        renderXb();
+        renderBatchResults(window._mpBM);
+        toastr?.success?.(`已按 AI 建议导入 ${pending.length} 条记忆`);
       });
     };
   };
 
 
-  const fmtCleanupSummary = (report) => {
-    if (!report) return '未检测到数据';
-    return report.summary || '未发现旧版 MP / LWB 快照痕迹';
-  };
-
   const renderCleanupSummary = () => {
-    const report = window.MemoryPilot?.detectLegacyArtifacts?.();
+    const report = inspectLegacyCleanup();
     const el = $('mp_cleanup_summary');
     if (!el) return report;
-    el.textContent = fmtCleanupSummary(report);
-    el.style.color = (report && (report.hasLegacyMpMetadata || report.hasLegacyMpVars || report.lwbSnapHasMpTraces)) ? '#fbbf24' : '#9ca3af';
+    const parts = [];
+    if (report.hasChatLegacy) parts.push(`发现旧版聊天残留 ${report.metadataKeys.length + report.variableKeys.length} 项，可以清理。`);
+    if (report.hasLwbLegacy) parts.push(`发现小白X快照里的旧 MP 副本 ${report.lwbCount} 项，可以清理。`);
+    el.textContent = parts.length ? parts.join(' ') : '当前聊天没有需要清理的旧版数据。';
+    el.style.color = parts.length ? '#9a6b16' : '#4f745a';
+    if ($('mp_cleanup_mp')) $('mp_cleanup_mp').disabled = !report.hasChatLegacy;
+    if ($('mp_cleanup_lwb')) $('mp_cleanup_lwb').disabled = !report.hasLwbLegacy;
     return report;
   };
 
@@ -2596,7 +3466,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   const restorePendingBatch = () => {
     const batchPage = $('mp_pg_batch');
     if (!batchPage) return;
-    const bannerId = renderPendingBanner(batchPage, 'batch', '批量分析');
+    const bannerId = renderPendingBanner(batchPage, 'batch', '楼层总结');
     if (bannerId) {
       const ops = checkStaleOps(loadPendingOps());
       const op = ops.batch;
@@ -2604,7 +3474,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         document.getElementById(bannerId + '_view')?.addEventListener('click', () => {
           const results = loadPendingResults('batch') || op.results || [];
           if (results.length) renderBatchResults(results);
-          else toastr?.warning?.('结果数据已过期（页面曾刷新），请重新分析');
+          else toastr?.warning?.('结果数据已过期（页面曾刷新），请重新总结');
         });
       }
     }
@@ -2612,7 +3482,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     const listPage = $('mp_pg_list');
     if (listPage) {
       const rbId = renderPendingBanner(listPage, 'rebuild', '批量重构关键词');
-      const mgId = renderPendingBanner(listPage, 'merge', '合并事件');
+      const mgId = renderPendingBanner(listPage, 'merge', '合并选中记忆');
     }
   };
   // 面板打开时立即检查
@@ -2620,12 +3490,12 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   try { renderCleanupSummary(); } catch {}
 
   $('mp_brun').onclick=async()=>{
-    if(_abort){_abort.abort();_abort=null;$('mp_brun').textContent='开始分析';try{await savePendingOp('batch',{status:'error',error:'手动停止'});}catch{}return;}
+    if(_abort){_abort.abort();_abort=null;$('mp_brun').textContent='开始总结';try{await savePendingOp('batch',{status:'error',error:'手动停止'});}catch{}return;}
     const indices=parseFloors($('mp_bf').value,chat.length);
     if(!indices.length){toastr?.warning?.('未选中楼层');return;}
     _abort=new AbortController();
     $('mp_brun').textContent='停止';
-    $('mp_br').innerHTML='<div class="ht">分析 '+indices.length+' 层...</div>';
+    $('mp_br').innerHTML='<div class="ht">正在总结 '+indices.length+' 层...</div>';
     await savePendingOp('batch', { status:'running', message: indices.length + '层' });
     const uL=ctx.name1||'用户',cL=ctx.name2||'角色';
     const cleaner = loadCleaner();
@@ -2679,11 +3549,11 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     }finally{
       _abort=null;
       const runBtn=$('mp_brun');
-      if(runBtn) runBtn.textContent='开始分析';
+      if(runBtn) runBtn.textContent='开始总结';
       const panel=$(P);
       if(panel && panel.style.display==='none') {
         panel.style.display='';
-        toastr?.success?.('分析已完成');
+        toastr?.success?.('楼层总结已完成');
       }
     }
   };
