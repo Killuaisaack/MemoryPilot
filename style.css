@@ -2,7 +2,7 @@
 
 /* Legacy chat/QR toolbar: launchers now live in the wand menu. */
 .mp-chat-bar {
-  display: none !important;
+  display: flex;
   gap: 4px;
   padding: 4px 8px;
   justify-content: flex-start;

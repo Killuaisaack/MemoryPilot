@@ -34,8 +34,10 @@ function getSettings() {
     s._global = {
       recallVersion: 'v34',
       customPrompts: {},
+      showChatBarButtons: false,
     };
   }
+  if (typeof s._global.showChatBarButtons !== 'boolean') s._global.showChatBarButtons = false;
   return s._global;
 }
 
@@ -168,12 +170,41 @@ function addWandMenuButtons() {
   }
 }
 
-// ====== Legacy chat/QR toolbar cleanup ======
+// ====== Optional chat/QR toolbar ======
 
-function hideChatBarButtons() {
-  // The wand menu is now the single launcher. This also cleans up a legacy
-  // toolbar that may still exist after a hot reload.
-  document.getElementById('mp_chat_buttons')?.remove();
+function syncChatBarButtons() {
+  const settings = getSettings();
+  if (!settings.showChatBarButtons) {
+    document.getElementById('mp_chat_buttons')?.remove();
+    return;
+  }
+  if (document.getElementById('mp_chat_buttons')) return;
+
+  const bar = document.createElement('div');
+  bar.id = 'mp_chat_buttons';
+  bar.className = 'mp-chat-bar';
+  bar.innerHTML = `
+    <button id="mp_btn_panel" class="mp-chat-btn" title="MP 管理面板">🧭 MP 管理面板</button>
+    <button id="mp_btn_api" class="mp-chat-btn" title="MP API配置">🧭 MP API配置</button>
+    <button id="mp_btn_monitor" class="mp-chat-btn" title="MP 召回监控">🧭 MP 召回监控</button>
+  `;
+  const targets = ['#qr--bar', '#form_sheld', '#send_form'];
+  let inserted = false;
+  for (const sel of targets) {
+    const target = document.querySelector(sel);
+    if (target) {
+      target.parentNode.insertBefore(bar, target);
+      inserted = true;
+      break;
+    }
+  }
+  if (!inserted) {
+    const sheld = document.getElementById('sheld');
+    if (sheld) sheld.appendChild(bar);
+  }
+  document.getElementById('mp_btn_panel')?.addEventListener('click', () => openPanel());
+  document.getElementById('mp_btn_api')?.addEventListener('click', () => openApiConfig());
+  document.getElementById('mp_btn_monitor')?.addEventListener('click', () => openMonitor());
 }
 
 // ====== Settings Panel in Extensions Drawer ======
@@ -196,6 +227,10 @@ function buildSettingsHtml() {
                 <option value="v32" ${settings.recallVersion === 'v32' ? 'selected' : ''}>v32 (经典)</option>
               </select>
             </div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+              <input type="checkbox" id="mp_show_chat_buttons" ${settings.showChatBarButtons ? 'checked' : ''}>
+              显示输入区快捷按钮（QR 上方）
+            </label>
             <div class="mp-info" style="font-size:11px;opacity:0.6;line-height:1.5">
               存储: extensionSettings · 零 /setvar · 不被 LWB 快照
             </div>
@@ -329,6 +364,11 @@ function bindSettingsEvents() {
     saveSettings();
     toastr.success(`召回引擎切换为 ${$(this).val()}`);
   });
+  $('#mp_show_chat_buttons').on('change', function() {
+    getSettings().showChatBarButtons = this.checked;
+    saveSettings();
+    syncChatBarButtons();
+  });
   $('#mp_show_logs').on('click', renderStorageLogBox);
   $('#mp_copy_logs').on('click', copyStorageLogs);
   $('#mp_clear_logs').on('click', function() {
@@ -406,13 +446,13 @@ jQuery(async () => {
   addWandMenuButtons();
 
   // Buttons above chat input (like original taskjs) — also kept for convenience
-  hideChatBarButtons();
+  syncChatBarButtons();
 
   // Re-add buttons if chat area is rebuilt
   ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, () => {
     setTimeout(() => {
       addWandMenuButtons();
-      hideChatBarButtons();
+      syncChatBarButtons();
     }, 500);
   });
 
