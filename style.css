@@ -1,8 +1,8 @@
 /* MemoryPilot Extension */
 
-/* ====== Chat bar buttons - same position as original taskjs buttons ====== */
+/* Legacy chat/QR toolbar: launchers now live in the wand menu. */
 .mp-chat-bar {
-  display: flex;
+  display: none !important;
   gap: 4px;
   padding: 4px 8px;
   justify-content: flex-start;

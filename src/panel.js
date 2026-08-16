@@ -1233,9 +1233,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   // ===== Style =====
   const st=document.createElement('style');st.id=S;
   st.textContent=`
-    #${P}{position:fixed;inset:0;z-index:10001;display:flex;align-items:flex-start;justify-content:center;padding:max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)) 10px;box-sizing:border-box;font-family:-apple-system,sans-serif}
+    #${P}{position:fixed!important;inset:0!important;z-index:10001;display:grid!important;place-items:center!important;width:100vw!important;height:100vh!important;height:100dvh!important;margin:0!important;padding:max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)) 10px;box-sizing:border-box!important;overflow:hidden!important;transform:none!important;font-family:-apple-system,sans-serif;isolation:isolate}
     #${P} .mask{position:absolute;inset:0;background:rgba(0,0,0,0.55);backdrop-filter:blur(5px)}
-    #${P} .card{position:relative;width:100%;max-width:960px;max-height:calc(100dvh - max(20px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,0.5)}
+    #${P} .mp-dialog-card{position:relative!important;inset:auto!important;float:none!important;width:100%!important;max-width:960px!important;height:100%!important;max-height:100%!important;margin:0!important;transform:none!important;box-sizing:border-box!important;background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);display:flex!important;flex-direction:column!important;overflow:hidden!important;box-shadow:0 16px 50px rgba(0,0,0,0.5)}
     #${P} .hd{padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0}
     #${P} .hd h3{margin:0;color:#fff;font-size:16px}
     #${P} .cls{background:none;border:none;color:#888;font-size:22px;cursor:pointer;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:50%}
@@ -1247,7 +1247,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     #${P} .tab{padding:6px 11px;border-radius:7px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:#aaa;cursor:pointer;font-size:11px;white-space:nowrap}
     #${P} .tab:hover{background:rgba(255,255,255,0.05);color:#fff}
     #${P} .tab.on{background:rgba(124,107,240,0.15);color:#7c6bf0;border-color:rgba(124,107,240,0.4)}
-    #${P} .bd{flex:1;overflow-y:auto;padding:12px 16px calc(96px + env(safe-area-inset-bottom, 0px));min-height:0;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom, 0px))}
+    #${P} .bd{flex:1 1 0;overflow-x:hidden;overflow-y:auto;padding:12px 16px calc(96px + env(safe-area-inset-bottom, 0px));min-width:0;min-height:0;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom, 0px))}
     #${P} .pg{display:none} #${P} .pg.on{display:block}
     #${P} .sts{display:flex;gap:8px;margin-bottom:12px}
     #${P} .st{flex:1;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 6px;text-align:center}
@@ -1313,7 +1313,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     #${P} .guidebox .stepgo{margin-left:6px;padding:2px 7px;font-size:10px}
     @media(max-width:760px){
       #${P}{padding:max(6px, env(safe-area-inset-top)) 6px max(6px, env(safe-area-inset-bottom)) 6px}
-      #${P} .card{max-width:100%;max-height:calc(100dvh - max(12px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));border-radius:10px}
+      #${P} .mp-dialog-card{max-width:100%!important;border-radius:10px}
       #${P} .hd{padding:9px 12px}
       #${P} .tabs{padding:6px 8px;gap:4px}
       #${P} .tab{padding:5px 8px;font-size:10px}
@@ -1328,7 +1328,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
     }
     @media(max-width:480px){
       #${P}{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0}
-      #${P} .card{border-radius:0;max-height:100dvh;border-left:none;border-right:none}
+      #${P} .mp-dialog-card{border-radius:0;border-left:none;border-right:none}
       #${P} .hd{padding:8px 10px}
       #${P} .tabs{padding:5px 6px}
       #${P} .bd{padding:8px 10px calc(120px + env(safe-area-inset-bottom, 0px));scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom, 0px))}
@@ -1343,7 +1343,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   const root=document.createElement('div');root.id=P;
   root.innerHTML=`
     <div class="mask"></div>
-    <div class="card">
+    <div class="mp-dialog-card">
       <div class="hd"><h3>Memory Pilot</h3><button class="cls" id="mp_cls">&times;</button></div>
       <div class="tabs">
         <button class="tab on" data-t="list">记忆列表</button>

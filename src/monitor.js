@@ -456,9 +456,9 @@ const renderCardList = (items, tone, showReason, opts = {}) => {
   const css = document.createElement('style');
   css.id = STYLE;
   css.textContent = `
-    #${PANEL}{position:fixed;inset:0;z-index:10020;display:flex;align-items:flex-start;justify-content:center;padding:max(12px,env(safe-area-inset-top)) 12px 12px;box-sizing:border-box}
+    #${PANEL}{position:fixed!important;inset:0!important;z-index:10020;display:grid!important;place-items:center!important;width:100vw!important;height:100vh!important;height:100dvh!important;margin:0!important;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom));box-sizing:border-box!important;overflow:hidden!important;transform:none!important;isolation:isolate}
     #${PANEL} .mask{position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px)}
-    #${PANEL} .card{position:relative;width:min(1180px,100%);max-height:calc(100dvh - 24px);overflow:auto;background:#1f2329;border:1px solid rgba(255,255,255,.08);border-radius:18px;box-shadow:0 18px 50px rgba(0,0,0,.35);color:#eef2ff}
+    #${PANEL} .mp-dialog-card{position:relative!important;inset:auto!important;float:none!important;width:min(1180px,100%)!important;max-height:100%!important;margin:0!important;transform:none!important;box-sizing:border-box!important;overflow:auto;background:#1f2329;border:1px solid rgba(255,255,255,.08);border-radius:18px;box-shadow:0 18px 50px rgba(0,0,0,.35);color:#eef2ff;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y}
     #${PANEL} .hd{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:18px 18px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
     #${PANEL} .ttl{font-size:18px;font-weight:700}
     #${PANEL} .sub{font-size:12px;opacity:.75;line-height:1.6;margin-top:4px}
@@ -483,11 +483,11 @@ const renderCardList = (items, tone, showReason, opts = {}) => {
     #${PANEL} .status{padding:0 16px 16px;font-size:12px;opacity:.82}
     @media(max-width:980px){
       #${PANEL} .bd{grid-template-columns:1fr}
-      #${PANEL} .card{overflow:auto;-webkit-overflow-scrolling:touch}
+      #${PANEL} .mp-dialog-card{overflow:auto}
     }
     @media(max-width:600px){
       #${PANEL}{padding:6px}
-      #${PANEL} .card{border-radius:12px}
+      #${PANEL} .mp-dialog-card{border-radius:12px}
       #${PANEL} .hd{flex-direction:column;padding:12px 12px 8px}
       #${PANEL} .sub{display:none}
       #${PANEL} .actions{width:100%}
@@ -496,9 +496,9 @@ const renderCardList = (items, tone, showReason, opts = {}) => {
     #${PANEL} .boxbd::-webkit-scrollbar{width:6px}
     #${PANEL} .boxbd::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:3px}
     #${PANEL} .boxbd{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.15) transparent}
-    #${PANEL} .card::-webkit-scrollbar{width:6px}
-    #${PANEL} .card::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:3px}
-    #${PANEL} .card{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.12) transparent}
+    #${PANEL} .mp-dialog-card::-webkit-scrollbar{width:6px}
+    #${PANEL} .mp-dialog-card::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:3px}
+    #${PANEL} .mp-dialog-card{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.12) transparent}
   `;
   document.head.appendChild(css);
 
@@ -506,7 +506,7 @@ const renderCardList = (items, tone, showReason, opts = {}) => {
   root.id = PANEL;
   root.innerHTML = `
     <div class="mask"></div>
-    <div class="card">
+    <div class="mp-dialog-card">
       <div class="hd">
         <div>
           <div class="ttl">召回监控</div>

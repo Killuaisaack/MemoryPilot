@@ -168,46 +168,12 @@ function addWandMenuButtons() {
   }
 }
 
-// ====== Chat Input Bar Buttons (above send form, as before) ======
+// ====== Legacy chat/QR toolbar cleanup ======
 
-function addChatBarButtons() {
-  if (document.getElementById('mp_chat_buttons')) return;
-
-  const bar = document.createElement('div');
-  bar.id = 'mp_chat_buttons';
-  bar.className = 'mp-chat-bar';
-  bar.innerHTML = `
-    <button id="mp_btn_panel" class="mp-chat-btn" title="MP 管理面板">🧭 MP 管理面板</button>
-    <button id="mp_btn_api" class="mp-chat-btn" title="MP API配置">🧭 MP API配置</button>
-    <button id="mp_btn_monitor" class="mp-chat-btn" title="MP 召回监控">🧭 MP 召回监控</button>
-  `;
-
-  // Insert above the chat input form - same position as taskjs buttons
-  const targets = [
-    '#qr--bar',                    // Quick Reply bar (if present, insert before it)
-    '#form_sheld',                 // The send form container
-    '#send_form',                  // The actual send form
-  ];
-
-  let inserted = false;
-  for (const sel of targets) {
-    const target = document.querySelector(sel);
-    if (target) {
-      target.parentNode.insertBefore(bar, target);
-      inserted = true;
-      break;
-    }
-  }
-
-  if (!inserted) {
-    // Fallback: append to the chat area
-    const sheld = document.getElementById('sheld');
-    if (sheld) sheld.appendChild(bar);
-  }
-
-  document.getElementById('mp_btn_panel').addEventListener('click', () => openPanel());
-  document.getElementById('mp_btn_api').addEventListener('click', () => openApiConfig());
-  document.getElementById('mp_btn_monitor').addEventListener('click', () => openMonitor());
+function hideChatBarButtons() {
+  // The wand menu is now the single launcher. This also cleans up a legacy
+  // toolbar that may still exist after a hot reload.
+  document.getElementById('mp_chat_buttons')?.remove();
 }
 
 // ====== Settings Panel in Extensions Drawer ======
@@ -440,13 +406,13 @@ jQuery(async () => {
   addWandMenuButtons();
 
   // Buttons above chat input (like original taskjs) — also kept for convenience
-  addChatBarButtons();
+  hideChatBarButtons();
 
   // Re-add buttons if chat area is rebuilt
   ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, () => {
     setTimeout(() => {
       addWandMenuButtons();
-      addChatBarButtons();
+      hideChatBarButtons();
     }, 500);
   });
 

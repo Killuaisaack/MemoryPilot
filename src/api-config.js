@@ -95,9 +95,9 @@ export async function openApiConfig() {
   const st = document.createElement('style');
   st.id = STYLE;
   st.textContent = `
-    #${PANEL} { position:fixed;inset:0;z-index:10002;display:flex;align-items:flex-start;justify-content:center;padding:max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)) 12px;box-sizing:border-box;font-family:-apple-system,sans-serif; }
+    #${PANEL} { position:fixed!important;inset:0!important;z-index:10002;display:grid!important;place-items:center!important;width:100vw!important;height:100vh!important;height:100dvh!important;margin:0!important;padding:max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)) 12px;box-sizing:border-box!important;overflow:hidden!important;transform:none!important;font-family:-apple-system,sans-serif;isolation:isolate; }
     #${PANEL} .mask { position:absolute;inset:0;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px); }
-    #${PANEL} .card { position:relative;width:100%;max-width:560px;max-height:calc(100dvh - max(24px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);padding:20px;box-shadow:0 16px 48px rgba(0,0,0,0.5);overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain; }
+    #${PANEL} .mp-dialog-card { position:relative!important;inset:auto!important;float:none!important;width:100%!important;max-width:560px!important;max-height:100%!important;margin:0!important;transform:none!important;box-sizing:border-box!important;background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);padding:20px;box-shadow:0 16px 48px rgba(0,0,0,0.5);overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y; }
     #${PANEL} h3 { margin:0 24px 16px 0;color:#fff;font-size:16px; }
     #${PANEL} .f { margin-bottom:12px; }
     #${PANEL} .f label { display:block;color:#aaa;font-size:11px;margin-bottom:3px; }
@@ -116,13 +116,13 @@ export async function openApiConfig() {
     #${PANEL} .status.err { background:rgba(248,113,113,0.12);color:#f87171; }
     @media(max-width:560px) {
       #${PANEL} { padding:max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)) 8px; }
-      #${PANEL} .card { max-width:100%;max-height:calc(100dvh - max(16px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));padding:16px;border-radius:10px; }
+      #${PANEL} .mp-dialog-card { max-width:100%!important;padding:16px;border-radius:10px; }
       #${PANEL} .row { flex-direction:column;align-items:stretch; }
       #${PANEL} .row .btn { width:100%; }
     }
     @media(max-width:420px) {
       #${PANEL} { padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0; }
-      #${PANEL} .card { border-radius:0;max-height:100dvh;border-left:none;border-right:none;padding:14px 12px; }
+      #${PANEL} .mp-dialog-card { border-radius:0;border-left:none;border-right:none;padding:14px 12px; }
       #${PANEL} h3 { font-size:15px; }
     }
   `;
@@ -132,7 +132,7 @@ export async function openApiConfig() {
   root.id = PANEL;
   root.innerHTML = `
     <div class="mask"></div>
-    <div class="card">
+    <div class="mp-dialog-card">
       <button class="close" id="mpa_close">&times;</button>
       <h3>Memory Pilot - API 配置</h3>
 
