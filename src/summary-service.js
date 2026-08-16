@@ -53,7 +53,30 @@ const normalizeOpenAIBase = value => String(value ?? '').trim().replace(/\/+$/,'
 const normalizeClaudeBase = value => String(value ?? '').trim().replace(/\/+$/,'').replace(/\/v1\/messages$/i,'');
 const normalizeGeminiBase = value => String(value ?? '').trim().replace(/\/+$/,'').replace(/\/models\/.*$/i,'');
 
-export const normalizePriority = value => value === 'high' || value === 'low' ? value : 'medium';
+export function normalizePriority(value) {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (
+    normalized === 'high'
+    || normalized.includes('常驻')
+    || normalized.includes('核心')
+    || normalized.includes('绝不能忘')
+    || normalized.includes('永久')
+  ) return 'high';
+  if (
+    normalized === 'low'
+    || normalized.includes('次级')
+    || normalized.includes('次要')
+    || normalized.includes('日常')
+    || normalized.includes('氛围')
+  ) return 'low';
+  if (
+    normalized === 'medium'
+    || normalized === 'main'
+    || normalized.includes('主要')
+    || normalized.includes('关键')
+  ) return 'medium';
+  return 'medium';
+}
 
 export function normalizeCleaner(cfg) {
   const defaults = {
@@ -164,6 +187,14 @@ export function getSummaryPrompt() {
   try {
     const local = localStorage.getItem('mp_prompt');
     if (local) return local.replace(/主要召回关键词|主召回关键词/g, '主关键词').replace(/门控关键词/g, '辅助关键词');
+  } catch {}
+  return DEFAULT_SUMMARY_PROMPT;
+}
+
+export function getAutoSummaryPrompt() {
+  try {
+    const custom = globalThis.MemoryPilot?.getCustomPrompt?.('autoSummary', '');
+    if (custom) return String(custom).replace(/主要召回关键词|主召回关键词/g, '主关键词').replace(/门控关键词/g, '辅助关键词');
   } catch {}
   return DEFAULT_SUMMARY_PROMPT;
 }

@@ -1,8 +1,9 @@
 import { loadConfig, saveConfig, loadMemories, saveMemories } from './storage.js';
 import {
+  DEFAULT_SUMMARY_PROMPT,
   normalizeCleaner,
   loadLegacyPanelValue,
-  getSummaryPrompt,
+  getAutoSummaryPrompt,
   buildFloorText,
   callConfiguredLLM,
   parseSummaryMemories,
@@ -13,7 +14,8 @@ export const AUTO_SUMMARY_DEFAULTS = Object.freeze({
   enabled: false,
   interval: 20,
   startFloor: 1,
-  priorityMode: 'fixed',
+  priorityMode: 'ai',
+  priorityModeVersion: 2,
   fixedPriority: 'medium',
   hideSummarized: false,
   keepRecent: 6,
@@ -34,6 +36,7 @@ let running = false;
 let visibilityHandler = null;
 let saveChatHandler = null;
 let hookedContext = null;
+let popupTimer = null;
 
 const clampInt = (value, fallback, min, max) => Math.max(min, Math.min(max, Math.round(Number.isFinite(Number(value)) ? Number(value) : fallback)));
 
@@ -43,7 +46,11 @@ export function normalizeAutoSummaryConfig(value) {
     enabled: src.enabled === true,
     interval: clampInt(src.interval, 20, 2, 200),
     startFloor: clampInt(src.startFloor, 1, 1, 999999),
-    priorityMode: src.priorityMode === 'ai' ? 'ai' : 'fixed',
+    // Before 4.0.0 the implicit default was fixed/medium. Treat that
+    // unmarked legacy value as the new AI-assisted mode; once the user saves
+    // the setting, an explicit fixed choice is kept.
+    priorityMode: src.priorityModeVersion === 2 && src.priorityMode === 'fixed' ? 'fixed' : 'ai',
+    priorityModeVersion: 2,
     fixedPriority: normalizePriority(src.fixedPriority),
     hideSummarized: src.hideSummarized === true,
     keepRecent: clampInt(src.keepRecent, 6, 0, 200),
@@ -74,6 +81,94 @@ export function loadAutoSummaryState() {
   return normalizeAutoSummaryState(loadConfig('autoSummaryState', { ...STATE_DEFAULTS, nextFloor: config.startFloor }), config);
 }
 
+export function loadAutoSummaryPrompt() {
+  return getAutoSummaryPrompt();
+}
+
+export function getDefaultAutoSummaryPrompt() {
+  return DEFAULT_SUMMARY_PROMPT;
+}
+
+export function saveAutoSummaryPrompt(value) {
+  const prompt = String(value ?? '').trim();
+  if (!prompt) throw new Error('自动总结 Prompt 不能为空');
+  if (!prompt.includes('{{content}}')) throw new Error('Prompt 中需要保留 {{content}}，用于放入待总结的楼层内容');
+  globalThis.MemoryPilot?.saveCustomPrompt?.('autoSummary', prompt);
+  return prompt;
+}
+
+export function resetAutoSummaryPrompt() {
+  globalThis.MemoryPilot?.resetCustomPrompt?.('autoSummary');
+  return DEFAULT_SUMMARY_PROMPT;
+}
+
+function closeAutoSummaryPopup() {
+  if (popupTimer) {
+    clearTimeout(popupTimer);
+    popupTimer = null;
+  }
+  try { globalThis.document?.getElementById('memorypilot-auto-summary-popup')?.remove(); } catch {}
+}
+
+function showAutoSummaryPopup(kind, title, message, autoClose = 0) {
+  const doc = globalThis.document;
+  if (!doc?.body) return;
+  closeAutoSummaryPopup();
+  let dark = true;
+  try { dark = globalThis.MemoryPilot?.getSettings?.()?.panelTheme !== 'light'; } catch {}
+  const colors = dark
+    ? { bg: '#292a2f', border: 'rgba(196,181,253,.42)', text: '#eeeeF2', muted: '#b8b5c2', accent: '#c4b5fd' }
+    : { bg: '#ffffff', border: '#d8cce4', text: '#3f3547', muted: '#6f6577', accent: '#745b91' };
+  const icon = kind === 'running' ? '✦' : kind === 'success' ? '✓' : kind === 'error' ? '!' : 'i';
+  const popup = doc.createElement('div');
+  popup.id = 'memorypilot-auto-summary-popup';
+  popup.setAttribute('role', 'status');
+  popup.setAttribute('aria-live', 'polite');
+  Object.assign(popup.style, {
+    position: 'fixed',
+    right: '18px',
+    bottom: '18px',
+    zIndex: '2147483000',
+    width: 'min(360px, calc(100vw - 36px))',
+    boxSizing: 'border-box',
+    padding: '13px 42px 13px 14px',
+    borderRadius: '12px',
+    border: `1px solid ${colors.border}`,
+    background: colors.bg,
+    color: colors.text,
+    boxShadow: dark ? '0 14px 38px rgba(0,0,0,.5)' : '0 14px 38px rgba(62,48,73,.2)',
+    fontFamily: 'inherit',
+  });
+  const heading = doc.createElement('div');
+  heading.textContent = `${icon} ${title}`;
+  Object.assign(heading.style, { fontSize: '13px', fontWeight: '700', color: colors.accent, marginBottom: '5px' });
+  const body = doc.createElement('div');
+  body.textContent = String(message || '');
+  Object.assign(body.style, { fontSize: '12px', lineHeight: '1.55', color: colors.muted, whiteSpace: 'pre-line' });
+  const close = doc.createElement('button');
+  close.type = 'button';
+  close.textContent = '×';
+  close.setAttribute('aria-label', '关闭提示');
+  Object.assign(close.style, {
+    position: 'absolute',
+    top: '7px',
+    right: '9px',
+    width: '28px',
+    height: '28px',
+    padding: '0',
+    border: '0',
+    borderRadius: '7px',
+    background: 'transparent',
+    color: colors.muted,
+    fontSize: '20px',
+    cursor: 'pointer',
+  });
+  close.onclick = closeAutoSummaryPopup;
+  popup.append(heading, body, close);
+  doc.body.appendChild(popup);
+  if (autoClose > 0) popupTimer = setTimeout(closeAutoSummaryPopup, autoClose);
+}
+
 function notifyState(state) {
   try { globalThis.dispatchEvent(new CustomEvent('memorypilot:auto-summary-state', { detail: state })); } catch {}
 }
@@ -89,7 +184,7 @@ async function persistState(patch) {
 
 export async function saveAutoSummaryConfig(value) {
   const previous = loadAutoSummaryConfig();
-  const next = normalizeAutoSummaryConfig(value);
+  const next = normalizeAutoSummaryConfig({ ...(value || {}), priorityModeVersion: 2 });
   await saveConfig('autoSummary', next);
   if (previous.startFloor !== next.startFloor) {
     await persistState({
@@ -211,7 +306,7 @@ async function performRange(startFloor, endFloor, reason = 'auto', expectedChat 
   const cleaner = currentCleaner(ctx);
   const content = buildFloorText(ctx, startFloor, endFloor, cleaner);
   if (!content.trim()) throw new Error(`第 ${startFloor}-${endFloor} 楼没有可总结的聊天内容`);
-  const prompt = getSummaryPrompt().replace('{{content}}', content);
+  const prompt = getAutoSummaryPrompt().replace('{{content}}', content);
   const raw = await callConfiguredLLM(ctx, prompt);
   if (expectedChat && contextIdentity(globalThis.SillyTavern?.getContext?.()) !== expectedChat) {
     throw Object.assign(new Error('聊天已切换，本次自动总结结果未写入'), { code: 'MP_CHAT_CHANGED' });
@@ -281,12 +376,15 @@ export async function runAutoSummary({ forceRetry = false } = {}) {
 
   running = true;
   await persistState({ running: true, lastStatus: `正在总结 #${startFloor}-${endFloor}…`, lastError: '' });
+  showAutoSummaryPopup('running', '正在自动总结', `正在整理第 ${startFloor}-${endFloor} 楼，请稍候。`);
   try {
     const memories = await performRange(startFloor, endFloor, forceRetry ? 'retry' : 'auto', runChat);
+    showAutoSummaryPopup('success', '自动总结完成', loadAutoSummaryState().lastStatus, 3200);
     return { ok: true, memories, range: [startFloor, endFloor] };
   } catch (error) {
     if (error?.code === 'MP_CHAT_CHANGED' || contextIdentity(globalThis.SillyTavern?.getContext?.()) !== runChat) {
       console.info('[MP] Auto summary discarded because the active chat changed.');
+      showAutoSummaryPopup('info', '本次总结已停止', '聊天已经切换，本次结果没有写入；之后会从原楼层继续。', 4500);
       return { skipped: 'chat-changed', range: [startFloor, endFloor] };
     }
     const message = error?.message || String(error);
@@ -299,6 +397,7 @@ export async function runAutoSummary({ forceRetry = false } = {}) {
       lastStatus: `自动总结待重试：#${startFloor}-${endFloor} 失败，将在下一周期叠加后重试。${message}`,
     });
     console.error('[MP] Automatic floor summary failed:', error);
+    showAutoSummaryPopup('error', '自动总结失败', `第 ${startFloor}-${endFloor} 楼已保留，达到下一周期后会连同新楼层一起重试。${message ? `\n${message}` : ''}`);
     try { globalThis.toastr?.error?.('自动楼层总结失败，已保留待总结楼层；下一周期会叠加后重试。'); } catch {}
     return { ok: false, error, range: [startFloor, endFloor] };
   } finally {

@@ -1588,6 +1588,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       #${P} .autosummary{background:rgba(255,255,255,.025)!important;border-color:rgba(255,255,255,.08)!important;box-shadow:none!important}
       #${P} .autosummarytitle{color:#ddd!important}
       #${P} .autosummary .fg input,#${P} .autosummary .fg select,#${P} .cfgcard .fg input:not([type="checkbox"]),#${P} .cfgcard .fg select{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important}
+      #${P} .prompteditor{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important;box-shadow:none!important}
       #${P} .autosummarystatus{background:rgba(255,255,255,.03)!important;border-color:rgba(255,255,255,.08)!important;color:#aaa!important}
       #${P} .autosummarystatus.err{background:rgba(248,113,113,.12)!important;border-color:rgba(248,113,113,.3)!important;color:#f87171!important}
       #${P} .st b,#${P} .me,#${P} .guidebox h4,#${P} .autosummarytitle{color:#fff!important}
@@ -1769,12 +1770,18 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
             <div class="autosummarygrid">
               <div class="fg"><label>自动总结间隔（楼层）</label><input id="mp_auto_interval" type="number" min="2" max="200" value="20"></div>
               <div class="fg"><label>开始总结楼层</label><input id="mp_auto_start" type="number" min="1" value="1"></div>
-              <div class="fg"><label>总结后的记忆如何导入</label><select id="mp_auto_priority_mode"><option value="fixed">按指定类型导入</option><option value="ai">按 AI 建议导入</option></select></div>
+              <div class="fg"><label>总结后的记忆如何导入</label><select id="mp_auto_priority_mode"><option value="ai">按 AI 建议导入</option><option value="fixed">按指定类型导入</option></select><div class="ht" style="margin-top:5px">按 AI 建议导入时，AI 会分别判断哪些内容应常驻、主要触发或次级触发；按指定类型导入则会把本次结果统一归为你选择的类型。</div></div>
               <div class="fg" id="mp_auto_fixed_wrap"><label>指定导入类型</label><select id="mp_auto_fixed"><option value="high">常驻</option><option value="medium">主要触发</option><option value="low">次级触发</option></select></div>
             </div>
             <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:2px"><label class="mp-check"><input type="checkbox" id="mp_auto_hide">总结成功后隐藏旧楼层</label></div>
             <div class="fg" id="mp_auto_keep_wrap" style="margin-top:9px"><label>始终保留最后 N 楼不隐藏</label><input id="mp_auto_keep" type="number" min="0" max="200" value="6"></div>
             <div class="ht">“隐藏”只会把已成功自动总结的旧楼层排除在 AI 上下文之外，不删除聊天原文。关闭后会恢复由 MemoryPilot 隐藏的楼层。</div>
+            <details class="det" style="margin-top:11px">
+              <summary>自动总结 Prompt（可编辑）</summary>
+              <textarea class="prompteditor" id="mp_auto_prompt" style="margin-top:7px"></textarea>
+              <div class="ht" style="margin-top:6px">Prompt 中请保留 <code>{{content}}</code>，它会被替换成待总结的楼层内容。自动总结使用独立 Prompt，不会改动手动楼层总结 Prompt。</div>
+              <div class="promptbuttons"><button class="btn" id="mp_auto_prompt_save">保存</button><button class="btn bd1" id="mp_auto_prompt_reset">恢复默认</button></div>
+            </details>
             <div class="autosummarystatus" id="mp_auto_status"></div>
             <div class="autosummaryactions"><button class="btn bp1" id="mp_auto_save">保存自动总结设置</button><button class="btn" id="mp_auto_retry" style="display:none">重试失败区间</button></div>
           </section>
@@ -2490,8 +2497,9 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
 
   renderList();renderXb();renderAnima();renderHorae();
 
-  const loadAutoCfg = () => window.MemoryPilot?.loadAutoSummaryConfig?.() || { enabled:false, interval:20, startFloor:1, priorityMode:'fixed', fixedPriority:'medium', hideSummarized:false, keepRecent:6 };
+  const loadAutoCfg = () => window.MemoryPilot?.loadAutoSummaryConfig?.() || { enabled:false, interval:20, startFloor:1, priorityMode:'ai', fixedPriority:'medium', hideSummarized:false, keepRecent:6 };
   const loadAutoState = () => window.MemoryPilot?.loadAutoSummaryState?.() || { nextFloor:1, completedThrough:0, paused:false, running:false, lastStatus:'尚未开始自动总结。', lastError:'' };
+  const loadAutoPrompt = () => window.MemoryPilot?.loadAutoSummaryPrompt?.() || window.MemoryPilot?.getDefaultAutoSummaryPrompt?.() || '';
   const syncAutoConditionalFields = () => {
     if ($('mp_auto_fixed_wrap')) $('mp_auto_fixed_wrap').style.display = $('mp_auto_priority_mode')?.value === 'ai' ? 'none' : '';
     if ($('mp_auto_keep_wrap')) $('mp_auto_keep_wrap').style.display = $('mp_auto_hide')?.checked ? '' : 'none';
@@ -2507,6 +2515,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       $('mp_auto_fixed').value = cfg.fixedPriority || 'medium';
       $('mp_auto_hide').checked = !!cfg.hideSummarized;
       $('mp_auto_keep').value = String(cfg.keepRecent ?? 6);
+      if ($('mp_auto_prompt')) $('mp_auto_prompt').value = loadAutoPrompt();
     }
     syncAutoConditionalFields();
     const nextStart = Number(state.nextFloor || cfg.startFloor || 1);
@@ -2528,6 +2537,25 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   renderAutoSummaryControls(true);
   $('mp_auto_priority_mode').onchange = syncAutoConditionalFields;
   $('mp_auto_hide').onchange = syncAutoConditionalFields;
+  $('mp_auto_prompt_save').onclick = () => {
+    try {
+      window.MemoryPilot?.saveAutoSummaryPrompt?.($('mp_auto_prompt').value || '');
+      $('mp_auto_prompt').value = loadAutoPrompt();
+      toastr?.success?.('自动总结 Prompt 已保存');
+    } catch (error) {
+      toastr?.error?.('保存失败：' + (error?.message || error));
+    }
+  };
+  $('mp_auto_prompt_reset').onclick = () => {
+    if (!confirm('恢复默认自动总结 Prompt？')) return;
+    try {
+      const prompt = window.MemoryPilot?.resetAutoSummaryPrompt?.() || window.MemoryPilot?.getDefaultAutoSummaryPrompt?.() || '';
+      $('mp_auto_prompt').value = prompt;
+      toastr?.success?.('自动总结 Prompt 已恢复默认');
+    } catch (error) {
+      toastr?.error?.('恢复失败：' + (error?.message || error));
+    }
+  };
   $('mp_auto_save').onclick = async () => {
     const previous = loadAutoCfg();
     const startFloor = Math.max(1, Math.round(Number($('mp_auto_start').value) || 1));
@@ -3299,6 +3327,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
         cleaner: loadCleaner(),
         apiConfig: loadApi(),
         summaryPrompt: loadPrompt(),
+        autoSummaryPrompt: loadAutoPrompt(),
         kwRebuildPrompt: loadKwPrompt(),
         mergePrompt: loadMergePrompt(),
         autoSummary: loadAutoCfg(),
@@ -3347,6 +3376,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       if (data.cleaner) { await saveCleaner(data.cleaner); counts.push('清洗规则'); }
       if (data.apiConfig && data.apiConfig.key) { await saveApi(data.apiConfig); counts.push('API配置'); }
       if (data.summaryPrompt) { await savePrompt(data.summaryPrompt); counts.push('总结 Prompt'); }
+      if (data.autoSummaryPrompt) { await window.MemoryPilot?.saveAutoSummaryPrompt?.(data.autoSummaryPrompt); counts.push('自动总结 Prompt'); }
       if (data.kwRebuildPrompt) { await saveKwPrompt(data.kwRebuildPrompt); counts.push('重构Prompt'); }
       if (data.mergePrompt) { await saveMergePrompt(data.mergePrompt); counts.push('合并Prompt'); }
       if (data.autoSummary) { await window.MemoryPilot?.saveAutoSummaryConfig?.(data.autoSummary); counts.push('自动总结设置'); }
