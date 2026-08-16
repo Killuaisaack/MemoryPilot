@@ -134,7 +134,9 @@ async function saveOfficialChat() {
 // ====== Wand Menu (Extensions Menu / 魔法棒) Buttons ======
 
 function addWandMenuButtons() {
-  if (document.getElementById('mp_wand_buttons')) return;
+  // SillyTavern may rebuild the wand popup after the extension has loaded.
+  // Check the actual button, not only the hidden marker.
+  if (document.getElementById('mp_wand_memorypilot')?.isConnected) return;
 
   // Find the wand menu popup container
   // SillyTavern uses #extensionsMenu as the wand popup, or the dropdown launched by the wand icon
@@ -161,42 +163,39 @@ function addWandMenuButtons() {
   marker.id = 'mp_wand_buttons';
   marker.style.display = 'none';
 
-  const fragment = document.createDocumentFragment();
-  fragment.appendChild(marker);
-
-  for (const item of items) {
-    const el = document.createElement('div');
-    el.id = item.id;
-    el.className = 'list-group-item flex-container flexGap5';
-    el.title = item.label;
-    el.innerHTML = `<i class="${item.icon}"></i> ${item.label}`;
-    el.addEventListener('click', item.handler);
-    fragment.appendChild(el);
-  }
-
   function insertInto(container) {
+    if (!container || document.getElementById('mp_wand_memorypilot')?.isConnected) return;
+    const fragment = document.createDocumentFragment();
+    fragment.appendChild(marker);
+    for (const item of items) {
+      const el = document.createElement('div');
+      el.id = item.id;
+      el.className = 'list-group-item flex-container flexGap5';
+      el.title = item.label;
+      el.innerHTML = `<i class="${item.icon}"></i> ${item.label}`;
+      el.addEventListener('click', item.handler);
+      fragment.appendChild(el);
+    }
     container.appendChild(fragment);
     console.log('[MP] Wand menu buttons added');
   }
 
-  if (wandContainer) {
-    insertInto(wandContainer);
-  } else {
-    // If wand container not found yet, observe DOM and retry
-    console.log('[MP] Wand menu container not found, will retry via MutationObserver');
-    const obs = new MutationObserver((mutations, observer) => {
-      for (const sel of wandSelectors) {
-        const el = document.querySelector(sel);
-        if (el && !document.getElementById('mp_wand_buttons')) {
-          insertInto(el);
-          observer.disconnect();
-          return;
-        }
+  if (wandContainer) insertInto(wandContainer);
+  else console.log('[MP] Wand menu container not found, will retry via MutationObserver');
+
+  // Keep watching even when the first popup was found: SillyTavern can
+  // replace its contents when the wand is opened or the chat layout changes.
+  const obs = new MutationObserver(() => {
+    for (const sel of wandSelectors) {
+      const el = document.querySelector(sel);
+      if (el && !document.getElementById('mp_wand_memorypilot')?.isConnected) {
+        insertInto(el);
+        return;
       }
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
-    setTimeout(() => obs.disconnect(), 30000);
-  }
+    }
+  });
+  if (document.body) obs.observe(document.body, { childList: true, subtree: true });
+  setTimeout(() => obs.disconnect(), 120000);
 }
 
 // ====== Optional chat/QR toolbar ======
@@ -249,6 +248,7 @@ function buildSettingsHtml() {
         </div>
         <div class="inline-drawer-content">
           <div style="display:flex;flex-direction:column;gap:8px;padding:8px 0">
+            <button id="mp_open_panel_settings" class="menu_button" style="width:100%">打开 MemoryPilot 面板</button>
             <div style="display:flex;align-items:center;gap:8px">
               <label style="min-width:80px">召回引擎</label>
               <select id="mp_recall_version" class="text_pole" style="flex:1">
@@ -401,6 +401,7 @@ async function handleUpdateClick() {
 }
 
 function bindSettingsEvents() {
+  $('#mp_open_panel_settings').on('click', () => openPanel());
   $('#mp_recall_version').on('change', function() {
     getSettings().recallVersion = $(this).val();
     saveSettings();
