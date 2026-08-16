@@ -1590,6 +1590,22 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       #${P} .autosummary .fg input,#${P} .autosummary .fg select,#${P} .cfgcard .fg input:not([type="checkbox"]),#${P} .cfgcard .fg select{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important}
       #${P} .autosummarystatus{background:rgba(255,255,255,.03)!important;border-color:rgba(255,255,255,.08)!important;color:#aaa!important}
       #${P} .autosummarystatus.err{background:rgba(248,113,113,.12)!important;border-color:rgba(248,113,113,.3)!important;color:#f87171!important}
+      #${P} .st b,#${P} .me,#${P} .guidebox h4,#${P} .autosummarytitle{color:#fff!important}
+      #${P} .st small,#${P} .ht,#${P} .sr .sp,#${P} .rc .rl{color:#888!important}
+      #${P} .ms,#${P} .sr,#${P} .sr .stx,#${P} .det summary{color:#bbb!important}
+      #${P} .xt,#${P} .me.jump{color:#c4b5fd!important}
+      #${P} .kw{background:rgba(124,107,240,.15)!important;color:#a5b4fc!important}
+      #${P} .kx{background:rgba(139,92,246,.2)!important;color:#c4b5fd!important}
+      #${P} .ke{background:rgba(59,130,246,.18)!important;color:#93c5fd!important}
+      #${P} .bph{background:rgba(248,113,113,.15)!important;color:#f87171!important}
+      #${P} .bpm{background:rgba(251,191,36,.15)!important;color:#fbbf24!important}
+      #${P} .bpl{background:rgba(74,222,128,.15)!important;color:#4ade80!important}
+      #${P} .bpi{background:rgba(255,255,255,.08)!important;color:#aaa!important}
+      #${P} .helpbtn,#${P} .cls{color:#888!important}
+      #${P} .helpbtn:hover,#${P} .cls:hover{background:rgba(255,255,255,.1)!important;color:#fff!important}
+      #${P} .searchtools{background:rgba(0,0,0,.2)!important;border-color:rgba(255,255,255,.08)!important}
+      #${P} .memoryhelpbody,#${P} .memoryfilterbody{color:#bbb!important}
+      #${P} .memoryhelp>summary,#${P} .memoryfilter>summary{color:#c4b5fd!important}
       #${P} .btn{background:rgba(255,255,255,.05)!important;border-color:rgba(255,255,255,.15)!important;color:#ddd!important}
       #${P} .fg input,#${P} .fg textarea,#${P} .fg select,#${P} #mp_f_search{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important}
       #${P} label,#${P} .fg label,#${P} .ht,#${P} .memoryhelpbody,#${P} .memoryfilterbody{color:#aaa!important}
