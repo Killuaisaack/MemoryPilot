@@ -1585,6 +1585,11 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       #${P} .tab,#${P} .ftab,#${P} .cfgsubtab{background:transparent!important;border-color:rgba(255,255,255,.08)!important;color:#aaa!important}
       #${P} .bd{background:#222327!important}
       #${P} .st,#${P} .mi,#${P} .xi,#${P} .sr,#${P} .rc,#${P} .det,#${P} .cfgcard,#${P} .memoryfilter{background:rgba(255,255,255,.025)!important;border-color:rgba(255,255,255,.08)!important;box-shadow:none!important}
+      #${P} .autosummary{background:rgba(255,255,255,.025)!important;border-color:rgba(255,255,255,.08)!important;box-shadow:none!important}
+      #${P} .autosummarytitle{color:#ddd!important}
+      #${P} .autosummary .fg input,#${P} .autosummary .fg select,#${P} .cfgcard .fg input:not([type="checkbox"]),#${P} .cfgcard .fg select{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important}
+      #${P} .autosummarystatus{background:rgba(255,255,255,.03)!important;border-color:rgba(255,255,255,.08)!important;color:#aaa!important}
+      #${P} .autosummarystatus.err{background:rgba(248,113,113,.12)!important;border-color:rgba(248,113,113,.3)!important;color:#f87171!important}
       #${P} .btn{background:rgba(255,255,255,.05)!important;border-color:rgba(255,255,255,.15)!important;color:#ddd!important}
       #${P} .fg input,#${P} .fg textarea,#${P} .fg select,#${P} #mp_f_search{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important}
       #${P} label,#${P} .fg label,#${P} .ht,#${P} .memoryhelpbody,#${P} .memoryfilterbody{color:#aaa!important}
