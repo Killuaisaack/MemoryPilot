@@ -18,6 +18,7 @@ export async function openPanel() {
     return out;
   };
   const P='mp_main_panel', S='mp_main_style', MK='mp_memories', AK='mp_api_config', PK='mp_prompt', KPK='mp_kw_rebuild_prompt', BK='mp_kw_blacklist', CK='mp_text_clean_cfg', RK='mp_recall_settings';
+  const selectedTheme = window.MemoryPilot?.getSettings?.()?.panelTheme || 'dark';
   const ctx = window.SillyTavern?.getContext?.();
   if (!ctx) return;
   const chat = ctx.chat || [];
@@ -1336,7 +1337,32 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       #${P} .mh{flex-direction:column}
       #${P} .bp{align-self:flex-start}
     }
-  `;
+  ` + (selectedTheme === 'light' ? `
+    /* ===== MemoryPilot Day — shared light surface ===== */
+    #${P}{color:#352f3c;color-scheme:light}
+    #${P} .mask{background:rgba(55,48,63,.22);backdrop-filter:blur(3px)}
+    #${P} .mp-dialog-card{background:#f8f6fb;border-color:#ddd7e5;box-shadow:0 18px 54px rgba(63,51,76,.18)}
+    #${P} .hd{border-color:#e8e3ed;background:#fff}
+    #${P} .hd h3{color:#302a37}
+    #${P} .cls{color:#756d7e}
+    #${P} .cls:hover{background:#f0ecf5;color:#3f3748}
+    #${P} .tabs{background:#fff;border-bottom:1px solid #e8e3ed}
+    #${P} .tab,#${P} .ftab{background:#faf9fb;border-color:#ded8e6;color:#625a6b}
+    #${P} .tab:hover,#${P} .ftab:hover{background:#f1edf6;color:#3e3547}
+    #${P} .tab.on,#${P} .ftab.on{background:#ebe5f4;border-color:#b7a8cb;color:#675181}
+    #${P} .st,#${P} .mi,#${P} .xi,#${P} .rc{background:#fff;border-color:#e1dce7}
+    #${P} .st b,#${P} .me{color:#302a37}
+    #${P} .st small,#${P} .ht,#${P} .emp,#${P} .fg label{color:#766e7e}
+    #${P} .ms,#${P} .sr .stx{color:#494151}
+    #${P} .btn{background:#fff;border-color:#d8d2df;color:#504858}
+    #${P} .btn:hover{background:#f0ecf4;color:#3e3547}
+    #${P} .fg input,#${P} .fg textarea,#${P} .fg select{background:#fff;color:#342e3a;border-color:#d9d3e0}
+    #${P} .det{border-color:#e1dce7}
+    #${P} .det summary{color:#665e6f}
+    #${P} .sr{background:#faf8fc;border-color:#e3dde9;color:#494151}
+    #${P} .guidebox{background:#fff;border-color:#ddd7e5;box-shadow:0 20px 70px rgba(63,51,76,.2)}
+    #${P} .guidebox h4,#${P} .guidebox ol{color:#302a37}
+  ` : '');
   document.head.appendChild(st);
 
   // ===== DOM =====

@@ -31,6 +31,7 @@ export async function openMonitor() {
     }
   }
   const $ = id => document.getElementById(id);
+  const selectedTheme = window.MemoryPilot?.getSettings?.()?.panelTheme || 'dark';
   const h = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   const norm = (s) => String(s ?? '').toLowerCase().trim();
   const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
@@ -499,7 +500,24 @@ const renderCardList = (items, tone, showReason, opts = {}) => {
     #${PANEL} .mp-dialog-card::-webkit-scrollbar{width:6px}
     #${PANEL} .mp-dialog-card::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:3px}
     #${PANEL} .mp-dialog-card{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.12) transparent}
-  `;
+  ` + (selectedTheme === 'dark' ? `
+    #${PANEL}{color:#eee;color-scheme:dark}
+    #${PANEL} .mask{background:rgba(0,0,0,.58)}
+    #${PANEL} .card{background:#222327;border-color:rgba(255,255,255,.08);box-shadow:0 18px 54px rgba(0,0,0,.5)}
+    #${PANEL} .topline,#${PANEL} .hubnav{background:#292a2f;border-color:rgba(255,255,255,.08)}
+    #${PANEL} .ttl{color:#fff}
+    #${PANEL} .hubtab{background:#303138;border-color:rgba(255,255,255,.12);color:#c9c7d0}
+    #${PANEL} .hubtab.on{background:rgba(124,107,240,.25);border-color:rgba(124,107,240,.5);color:#c4b5fd}
+    #${PANEL} .summarybar{background:#25262b;border-color:rgba(255,255,255,.08)}
+    #${PANEL} .summarytext{color:#bbb7c3}
+    #${PANEL} .btn{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.15);color:#ddd}
+    #${PANEL} .rulesbody,#${PANEL} .fold{background:#292a2f;border-color:rgba(255,255,255,.1)}
+    #${PANEL} .fold>summary{background:#292a2f}
+    #${PANEL} .source,#${PANEL} .memory,#${PANEL} .settingitem{background:#303138;border-color:rgba(255,255,255,.1)}
+    #${PANEL} .foldtitle,#${PANEL} .grouphead{color:#eee}
+    #${PANEL} .sourcetext,#${PANEL} .memorysummary,#${PANEL} .foldbody{color:#ddd}
+    #${PANEL} .sourcehead,#${PANEL} .memoryevent{color:#c4b5fd}
+  ` : '');
   document.head.appendChild(css);
 
   const root = document.createElement('div');

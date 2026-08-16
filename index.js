@@ -37,9 +37,11 @@ function getSettings() {
       recallVersion: 'v34',
       customPrompts: {},
       showChatBarButtons: false,
+      panelTheme: 'dark',
     };
   }
   if (typeof s._global.showChatBarButtons !== 'boolean') s._global.showChatBarButtons = false;
+  if (!['dark', 'light'].includes(s._global.panelTheme)) s._global.panelTheme = 'dark';
   return s._global;
 }
 
@@ -121,12 +123,10 @@ function addWandMenuButtons() {
     if (wandContainer) break;
   }
 
-  // Build individual menu items that match ST native wand menu style
-  // Each item mimics the same structure as "Open Data Bank", "Token Counter", etc.
+  // Keep a single compact entry in the native wand menu. The hub handles
+  // memory, monitoring, API configuration and settings navigation.
   const items = [
-    { id: 'mp_wand_panel',   icon: 'fa-solid fa-compass',    label: 'MP 面板',   handler: () => openPanel() },
-    { id: 'mp_wand_api',     icon: 'fa-solid fa-gear',       label: 'MP API',    handler: () => openApiConfig() },
-    { id: 'mp_wand_monitor', icon: 'fa-solid fa-chart-line', label: 'MP 监控',   handler: () => openMonitor() },
+    { id: 'mp_wand_memorypilot', icon: 'fa-solid fa-wand-magic-sparkles', label: 'MemoryPilot', handler: () => openPanel() },
   ];
 
   // Create a minimal marker so we don't double-insert
@@ -233,6 +233,13 @@ function buildSettingsHtml() {
               <input type="checkbox" id="mp_show_chat_buttons" ${settings.showChatBarButtons ? 'checked' : ''}>
               显示输入区快捷按钮（QR 上方）
             </label>
+            <div style="display:flex;align-items:center;gap:8px">
+              <label style="min-width:80px">面板主题</label>
+              <select id="mp_panel_theme" class="text_pole" style="flex:1">
+                <option value="light" ${settings.panelTheme === 'light' ? 'selected' : ''}>白天</option>
+                <option value="dark" ${settings.panelTheme === 'dark' ? 'selected' : ''}>黑夜</option>
+              </select>
+            </div>
             <div class="mp-info" style="font-size:11px;opacity:0.6;line-height:1.5">
               存储: extensionSettings · 零 /setvar · 不被 LWB 快照
             </div>
@@ -376,6 +383,20 @@ function bindSettingsEvents() {
     getSettings().showChatBarButtons = this.checked;
     saveSettings();
     syncChatBarButtons();
+  });
+  $('#mp_panel_theme').on('change', function() {
+    getSettings().panelTheme = this.value === 'light' ? 'light' : 'dark';
+    saveSettings();
+    const open = Boolean(document.getElementById('mp_main_panel') || document.getElementById('mp_api_panel') || document.getElementById('mp_recall_monitor_panel'));
+    if (open) {
+      document.getElementById('mp_main_panel')?.remove();
+      document.getElementById('mp_main_style')?.remove();
+      document.getElementById('mp_api_panel')?.remove();
+      document.getElementById('mp_api_style')?.remove();
+      document.getElementById('mp_recall_monitor_panel')?.remove();
+      document.getElementById('mp_recall_monitor_style')?.remove();
+      openPanel();
+    }
   });
   $('#mp_show_logs').on('click', renderStorageLogBox);
   $('#mp_copy_logs').on('click', copyStorageLogs);

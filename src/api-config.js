@@ -91,6 +91,7 @@ export async function openApiConfig() {
 
   const cfg = await load();
   const provider = cfg.provider || 'openai';
+  const selectedTheme = window.MemoryPilot?.getSettings?.()?.panelTheme || 'dark';
 
   const st = document.createElement('style');
   st.id = STYLE;
@@ -125,7 +126,21 @@ export async function openApiConfig() {
       #${PANEL} .mp-dialog-card { border-radius:0;border-left:none;border-right:none;padding:14px 12px; }
       #${PANEL} h3 { font-size:15px; }
     }
-  `;
+  ` + (selectedTheme === 'light' ? `
+    #${PANEL}{color:#352f3c;color-scheme:light}
+    #${PANEL} .mask{background:rgba(55,48,63,.22)}
+    #${PANEL} .card{background:#f8f6fb;border-color:#ddd7e5;box-shadow:0 18px 54px rgba(63,51,76,.18)}
+    #${PANEL} .topline,#${PANEL} .hubnav{background:#fff;border-color:#e8e3ed}
+    #${PANEL} h3{color:#302a37}
+    #${PANEL} .hubtab{background:#faf9fb;border-color:#ded8e6;color:#625a6b}
+    #${PANEL} .hubtab.on{background:#ebe5f4;border-color:#b7a8cb;color:#675181}
+    #${PANEL} .settingsnav{background:#f4f1f7;border-color:#e3dfe8}
+    #${PANEL} .settab{background:#fff;border-color:#ddd7e5;color:#665e6f}
+    #${PANEL} .settab.on{background:#e9e1f2;color:#694f85;border-color:#b9a7cd}
+    #${PANEL} .f label{color:#5d5565}
+    #${PANEL} .f input,#${PANEL} .f select{background:#fff!important;color:#342e3a!important;border-color:#d9d3e0!important}
+    #${PANEL} .btn{background:#fff;border-color:#d8d2df;color:#504858}
+  ` : '');
   document.head.appendChild(st);
 
   const root = document.createElement('div');
