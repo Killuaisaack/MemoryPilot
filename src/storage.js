@@ -695,15 +695,76 @@ export async function migrateIfNeeded() {
 // ====== Chat isolation ======
 
 let _prevChatKey = null;
-export function onChatChanged() {
+
+function cloneStoredValue(value) {
+  try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
+}
+
+/**
+ * SillyTavern 1.16 restores a chat backup by importing it as a new chat.
+ * The imported JSONL keeps our lightweight metadata pointer, while its new
+ * chat id produces a different extensionSettings key. Copy the original
+ * chat-scoped MP store to the imported chat the first time it is opened.
+ */
+async function restoreChatStoreFromPointer(newKey) {
+  const pointer = getPointer();
+  const sourceKey = typeof pointer?.chatKey === 'string' ? pointer.chatKey : '';
+  if (!sourceKey || sourceKey === newKey) return null;
+
+  const store = getStore();
+  if (!store || !Object.prototype.hasOwnProperty.call(store, sourceKey)) return null;
+
+  const source = store[sourceKey];
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+
+  const target = store[newKey];
+  const targetHasData = target && typeof target === 'object' && Object.keys(target).length > 0;
+  if (targetHasData) {
+    // Never overwrite data that already belongs to the imported chat.
+    setPointer({ version: 1, chatKey: newKey, storeMode: 'extensionSettings' });
+    return null;
+  }
+
+  const restored = cloneStoredValue(source);
+  if (!restored) return null;
+  store[newKey] = restored;
+  _lastMemoriesSignature = null;
+
+  const memories = Array.isArray(restored.memories)
+    ? restored.memories
+    : (Array.isArray(restored.mp_memories) ? restored.mp_memories : []);
+  cacheMemories(memories);
+
+  setPointer({ version: 1, chatKey: newKey, storeMode: 'extensionSettings' });
+  saveSettingsDebounced();
+  try {
+    const ctx = getCtx();
+    if (typeof ctx?.saveMetadata === 'function') await ctx.saveMetadata();
+    else if (typeof ctx?.saveChatMetadata === 'function') await ctx.saveChatMetadata();
+  } catch (e) {
+    console.warn('[MP] backup restore pointer save err', e);
+  }
+
+  logOp('recover', 'chatBackup', `${sourceKey.slice(0, 60)} -> ${newKey.slice(0, 60)}; ${memories.length} items`);
+  return {
+    restored: true,
+    sourceKey,
+    targetKey: newKey,
+    memoryCount: memories.length,
+  };
+}
+
+export async function onChatChanged() {
   resetChatKey();
   const newKey = getChatKey();
+  const recovery = await restoreChatStoreFromPointer(newKey);
   if (_prevChatKey && _prevChatKey !== newKey) {
     try { localStorage.removeItem('mp_memories_' + _prevChatKey); } catch {}
   }
   _prevChatKey = newKey;
   // 重置迁移标记（不同聊天可能需要迁移）
   // 但实际迁移检查在 migrateIfNeeded 内部做
+  return recovery;
 }
 
 // ====== Sticky State (stored in extensionSettings, not chat metadata) ======

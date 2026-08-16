@@ -393,7 +393,14 @@ function hookRecall() {
       try { await runRecall(); } catch (e) { console.error('[MP] Recall error:', e); }
     });
     ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, async () => {
-      try { onChatChanged(); } catch {}
+      try {
+        const recovery = await onChatChanged();
+        if (recovery?.restored) {
+          toastr?.success?.(`已随聊天备份恢复 ${recovery.memoryCount} 条 MemoryPilot 记忆`);
+        }
+      } catch (e) {
+        console.warn('[MP] chat backup memory recovery err', e);
+      }
       try {
         const prev = localStorage.getItem('mp_active_chat');
         const charId = ctx?.characterId;
@@ -429,6 +436,10 @@ jQuery(async () => {
   }
 
   try {
+    const recovery = await onChatChanged();
+    if (recovery?.restored) {
+      toastr?.success?.(`已随聊天备份恢复 ${recovery.memoryCount} 条 MemoryPilot 记忆`);
+    }
     await migrateIfNeeded();
     // 静默检测，不再弹 toastr —— migrateIfNeeded 内部已做幂等
     const report = detectLegacyArtifacts();
