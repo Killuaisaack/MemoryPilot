@@ -18,6 +18,9 @@
 
 const META_NS = 'MemoryPilot';
 const MODULE_NAME = 'MemoryPilot';
+const RECOVERY_INDEX_KEY = '_chatRecoveryIndex';
+const MAX_RECOVERY_INDEX_ENTRIES = 500;
+const POINTER_SUPPRESS_PREFIX = 'mp_pointer_suppressed_';
 
 // Keys that go into extensionSettings (server-synced, separate from chat file)
 const STORE_KEYS = {
@@ -37,6 +40,7 @@ const POINTER_KEYS = ['version', 'chatKey', 'lastProcessedFloor', 'lastRecallTur
 let _ctx = null;
 let _chatKey = null;
 let _settingsSaveTimer = null;
+let _metadataSaveChain = Promise.resolve();
 const _SETTINGS_DEBOUNCE = 8000;
 
 
@@ -306,16 +310,112 @@ function getPointer() {
 
 function setPointer(patch) {
   const ctx = getCtx();
-  if (!ctx) return;
+  if (!ctx) return false;
   try {
     ctx.chatMetadata = ctx.chatMetadata || {};
     ctx.chatMetadata.extensions = ctx.chatMetadata.extensions || {};
     const ns = ctx.chatMetadata.extensions[META_NS] = ctx.chatMetadata.extensions[META_NS] || {};
+    let changed = false;
     for (const [k, v] of Object.entries(patch || {})) {
-      if (POINTER_KEYS.includes(k)) ns[k] = v;
+      if (POINTER_KEYS.includes(k) && ns[k] !== v) {
+        ns[k] = v;
+        changed = true;
+      }
     }
-    // DON'T call saveMetadata here - let ST's own debounce handle it
-  } catch (e) { console.warn('[MP] setPointer err', e); }
+    return changed;
+  } catch (e) {
+    console.warn('[MP] setPointer err', e);
+    return false;
+  }
+}
+
+async function saveChatMetadataNow(reason = 'pointer') {
+  const ctx = getCtx();
+  const save = typeof ctx?.saveMetadata === 'function'
+    ? ctx.saveMetadata
+    : (typeof ctx?.saveChatMetadata === 'function'
+      ? ctx.saveChatMetadata
+      : (typeof ctx?.saveChat === 'function' ? ctx.saveChat : null));
+  if (!save) return false;
+
+  _metadataSaveChain = _metadataSaveChain
+    .catch(() => {})
+    .then(async () => {
+      await save.call(ctx);
+      logOp('save', 'chatMetadata', reason);
+    });
+
+  try {
+    await _metadataSaveChain;
+    return true;
+  } catch (e) {
+    console.warn('[MP] chat metadata save err', e);
+    return false;
+  }
+}
+
+function getChatIntegrity() {
+  const value = getCtx()?.chatMetadata?.integrity;
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function pointerSuppressionKey(chatKey = getChatKey()) {
+  return POINTER_SUPPRESS_PREFIX + chatKey;
+}
+
+function isPointerSuppressed(chatKey = getChatKey()) {
+  try { return localStorage.getItem(pointerSuppressionKey(chatKey)) === '1'; } catch { return false; }
+}
+
+function suppressPointer(chatKey = getChatKey()) {
+  try { localStorage.setItem(pointerSuppressionKey(chatKey), '1'); } catch {}
+}
+
+function hasStoredChatData(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+}
+
+function getRecoveryIndex(store, create = false) {
+  if (!store) return null;
+  const current = store[RECOVERY_INDEX_KEY];
+  if (current && typeof current === 'object' && !Array.isArray(current)) return current;
+  if (!create) return null;
+  store[RECOVERY_INDEX_KEY] = {};
+  return store[RECOVERY_INDEX_KEY];
+}
+
+function registerRecoveryIdentity(chatKey) {
+  const integrity = getChatIntegrity();
+  const store = getStore();
+  if (!integrity || !store || !hasStoredChatData(store[chatKey])) return false;
+
+  const index = getRecoveryIndex(store, true);
+  if (index[integrity] === chatKey) return false;
+  index[integrity] = chatKey;
+
+  const keys = Object.keys(index);
+  if (keys.length > MAX_RECOVERY_INDEX_ENTRIES) {
+    for (const staleKey of keys.slice(0, keys.length - MAX_RECOVERY_INDEX_ENTRIES)) {
+      delete index[staleKey];
+    }
+  }
+  saveSettingsDebounced();
+  return true;
+}
+
+async function ensureCurrentChatRecoveryMetadata() {
+  const chatKey = getChatKey();
+  registerRecoveryIdentity(chatKey);
+  if (isPointerSuppressed(chatKey)) return false;
+  const pointerChanged = setPointer({
+    version: 1,
+    chatKey,
+    storeMode: 'extensionSettings',
+  });
+  if (pointerChanged) {
+    await saveChatMetadataNow('backup recovery pointer');
+  }
+  return pointerChanged;
 }
 
 // ====== Prompt Variable Injection (write to chatMetadata.variables only) ======
@@ -551,6 +651,9 @@ export async function saveMemories(mems) {
     cacheMemories(arr, jsonStr);
     // 仅更新 localStorage 缓存（可能被外部清除）
     cacheMemories(arr);
+    // The payload can be unchanged while a newly opened/imported chat still
+    // needs its recovery pointer written into the JSONL header.
+    await ensureCurrentChatRecoveryMetadata();
     return arr;
   }
   _lastMemoriesSignature = sig;
@@ -567,11 +670,9 @@ export async function saveMemories(mems) {
   }
 
   // Update lightweight pointer (只在真正变更时写)
-  setPointer({
-    version: 1,
-    chatKey: getChatKey(),
-    storeMode: 'extensionSettings',
-  });
+  // Direct mutations to ctx.chatMetadata are not persisted automatically by
+  // SillyTavern, so explicitly save the lightweight pointer when it changes.
+  await ensureCurrentChatRecoveryMetadata();
 
   logOp('save', 'memories', `${arr.length} items`);
   return arr;
@@ -708,23 +809,29 @@ function cloneStoredValue(value) {
  */
 async function restoreChatStoreFromPointer(newKey) {
   const pointer = getPointer();
-  const sourceKey = typeof pointer?.chatKey === 'string' ? pointer.chatKey : '';
-  if (!sourceKey || sourceKey === newKey) return null;
-
   const store = getStore();
-  if (!store || !Object.prototype.hasOwnProperty.call(store, sourceKey)) return null;
+  if (!store) return null;
 
-  const source = store[sourceKey];
-  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+  const pointerSource = typeof pointer?.chatKey === 'string' ? pointer.chatKey : '';
+  const integrity = getChatIntegrity();
+  const indexedSource = integrity ? getRecoveryIndex(store)?.[integrity] : '';
+  const sourceKey = [pointerSource, indexedSource].find(key => (
+    typeof key === 'string'
+    && key
+    && key !== newKey
+    && Object.prototype.hasOwnProperty.call(store, key)
+    && hasStoredChatData(store[key])
+  )) || '';
+  if (!sourceKey) return null;
 
   const target = store[newKey];
-  const targetHasData = target && typeof target === 'object' && Object.keys(target).length > 0;
+  const targetHasData = hasStoredChatData(target);
   if (targetHasData) {
     // Never overwrite data that already belongs to the imported chat.
-    setPointer({ version: 1, chatKey: newKey, storeMode: 'extensionSettings' });
     return null;
   }
 
+  const source = store[sourceKey];
   const restored = cloneStoredValue(source);
   if (!restored) return null;
   store[newKey] = restored;
@@ -735,19 +842,13 @@ async function restoreChatStoreFromPointer(newKey) {
     : (Array.isArray(restored.mp_memories) ? restored.mp_memories : []);
   cacheMemories(memories);
 
-  setPointer({ version: 1, chatKey: newKey, storeMode: 'extensionSettings' });
   saveSettingsDebounced();
-  try {
-    const ctx = getCtx();
-    if (typeof ctx?.saveMetadata === 'function') await ctx.saveMetadata();
-    else if (typeof ctx?.saveChatMetadata === 'function') await ctx.saveChatMetadata();
-  } catch (e) {
-    console.warn('[MP] backup restore pointer save err', e);
-  }
 
-  logOp('recover', 'chatBackup', `${sourceKey.slice(0, 60)} -> ${newKey.slice(0, 60)}; ${memories.length} items`);
+  const recoveryMode = sourceKey === pointerSource ? 'pointer' : 'integrity';
+  logOp('recover', 'chatBackup', `${recoveryMode}; ${sourceKey.slice(0, 60)} -> ${newKey.slice(0, 60)}; ${memories.length} items`);
   return {
     restored: true,
+    recoveryMode,
     sourceKey,
     targetKey: newKey,
     memoryCount: memories.length,
@@ -758,6 +859,9 @@ export async function onChatChanged() {
   resetChatKey();
   const newKey = getChatKey();
   const recovery = await restoreChatStoreFromPointer(newKey);
+  // SillyTavern's integrity id survives backup import. Keep an index for older
+  // backups that predate our pointer, then persist the current pointer.
+  await ensureCurrentChatRecoveryMetadata();
   if (_prevChatKey && _prevChatKey !== newKey) {
     try { localStorage.removeItem('mp_memories_' + _prevChatKey); } catch {}
   }
@@ -927,10 +1031,14 @@ export async function cleanupLegacyArtifacts(options = {}) {
     }
   }
 
-  // Rebuild minimal pointer after cleanup
-  try {
-    setPointer({ version: 1, chatKey: getChatKey(), storeMode: 'extensionSettings' });
-  } catch {}
+  // Do not recreate the MP pointer after an explicit metadata cleanup. The
+  // integrity index above remains outside chat metadata and is sufficient for
+  // backup recovery without undoing the user's cleanup choice.
+  if (opts.removeMpMetadata) {
+    suppressPointer(getChatKey());
+    registerRecoveryIdentity(getChatKey());
+    flushSettingsNow();
+  }
 
   if (result.changed) {
     try {
