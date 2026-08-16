@@ -242,7 +242,7 @@ function buildSettingsHtml() {
             <textarea id="mp_storage_log_box" class="text_pole" readonly style="display:none;width:100%;min-height:150px;font-size:11px;white-space:pre;font-family:monospace"></textarea>
             <div id="mp_storage_log_status" class="mp-info" style="font-size:11px;opacity:0.65"></div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
-              <button id="mp_update_btn" class="menu_button" style="flex:1">检查是否最新</button>
+              <button id="mp_update_btn" class="menu_button" style="flex:1">更新到最新版</button>
               <button id="mp_reload_btn" class="menu_button" style="flex:1">重载应用更新</button>
             </div>
             <div id="mp_update_status" class="mp-info" style="font-size:11px;opacity:0.75;line-height:1.5"></div>
@@ -284,77 +284,83 @@ async function copyStorageLogs() {
   }
 }
 
-function compareVersions(a, b) {
-  const pa = String(a || '0').split(/[^\d]+/).filter(Boolean).map(Number);
-  const pb = String(b || '0').split(/[^\d]+/).filter(Boolean).map(Number);
-  const len = Math.max(pa.length, pb.length, 3);
-  for (let i = 0; i < len; i += 1) {
-    const da = pa[i] || 0;
-    const db = pb[i] || 0;
-    if (da > db) return 1;
-    if (da < db) return -1;
+function getInstalledExtensionName() {
+  try {
+    const path = decodeURIComponent(new URL(import.meta.url).pathname);
+    const match = path.match(/\/scripts\/extensions\/(?:third-party\/)?([^/]+)\//i);
+    if (match?.[1]) return match[1];
+  } catch {
+    // Fall back to the repository/folder name used by normal installations.
   }
-  return 0;
+  return MODULE_NAME;
 }
 
-function deriveRemoteManifestUrl(homePage) {
-  const raw = String(homePage || '').trim();
-  if (!raw) return '';
-  try {
-    const url = new URL(raw);
-    if (url.hostname === 'github.com') {
-      const parts = url.pathname.split('/').filter(Boolean);
-      if (parts.length >= 2) {
-        const branch = parts[2] === 'tree' && parts[3] ? parts[3] : 'main';
-        return `https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/${branch}/manifest.json`;
-      }
-    }
-    return new URL('manifest.json', url.href.endsWith('/') ? url.href : `${url.href}/`).href;
-  } catch {
-    return '';
+async function getInstalledExtensionTarget(extensionName) {
+  const response = await fetch('/api/extensions/discover', { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`无法识别扩展安装位置（HTTP ${response.status}）`);
   }
+
+  const extensions = await response.json();
+  const suffix = `/${extensionName}`.toLowerCase();
+  const installed = Array.isArray(extensions)
+    ? extensions.find(item => String(item?.name || '').toLowerCase().endsWith(suffix))
+    : null;
+
+  if (!installed) {
+    throw new Error(`扩展管理器中未找到 ${extensionName}`);
+  }
+
+  return {
+    extensionName,
+    global: installed.type === 'global',
+  };
 }
 
 async function handleUpdateClick() {
   const status = $('#mp_update_status');
-  status.text('正在检查 MemoryPilot 版本...');
+  const updateButton = $('#mp_update_btn');
+  const reloadButton = $('#mp_reload_btn');
+  const originalText = updateButton.text();
+
+  updateButton.prop('disabled', true).text('正在拉取更新...');
+  reloadButton.prop('disabled', true);
+  status.text('正在从仓库拉取 MemoryPilot 最新版本，请稍候...');
+
   try {
-    const local = await fetch(new URL('./manifest.json', import.meta.url), { cache: 'no-store' }).then(r => r.json());
-    const current = String(local?.version || 'unknown');
-    const homePage = String(local?.homePage || '').trim();
-    const remoteManifestUrl = deriveRemoteManifestUrl(homePage);
-    if (!remoteManifestUrl) {
-      const msg = `无法检查最新版本：当前版本 ${current}，但 manifest.homePage 未配置。请配置仓库主页后再检查。`;
-      status.text(msg);
-      toastr?.warning?.(msg);
-      return;
-    }
-    const remote = await fetch(remoteManifestUrl, { cache: 'no-store' }).then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json();
+    const extensionName = getInstalledExtensionName();
+    const target = await getInstalledExtensionTarget(extensionName);
+    const getRequestHeaders = SillyTavern.getContext()?.getRequestHeaders;
+    const headers = typeof getRequestHeaders === 'function'
+      ? getRequestHeaders()
+      : { 'Content-Type': 'application/json' };
+
+    const response = await fetch('/api/extensions/update', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(target),
     });
-    const latest = String(remote?.version || 'unknown');
-    const cmp = compareVersions(latest, current);
-    if (cmp > 0) {
-      const msg = `发现新版本：当前 ${current}，仓库最新 ${latest}。请打开 SillyTavern / TauriTavern 扩展管理器更新 MemoryPilot。`;
-      status.text(msg);
-      toastr?.info?.(msg);
-      if (homePage) window.open(homePage, '_blank', 'noopener,noreferrer');
-      return;
+
+    if (!response.ok) {
+      const detail = (await response.text()).trim();
+      throw new Error(detail || `服务器返回 HTTP ${response.status}`);
     }
-    if (cmp === 0) {
-      const msg = `已是最新版本：${current}`;
-      status.text(msg);
-      toastr?.success?.(msg);
-      return;
-    }
-    const msg = `本地版本 ${current} 高于仓库版本 ${latest}。本地已经是更新版本；如需公开给用户，请确认仓库 manifest 已同步。`;
+
+    const result = await response.json();
+    const commit = result?.shortCommitHash ? `（${result.shortCommitHash}）` : '';
+    const msg = result?.isUpToDate
+      ? `已确认是仓库最新版${commit}，正在刷新...`
+      : `更新已拉取完成${commit}，正在刷新应用...`;
+
     status.text(msg);
-    toastr?.info?.(msg);
+    toastr?.success?.(msg);
+    setTimeout(() => location.reload(), 800);
   } catch (e) {
-    const msg = `检查失败：${e?.message || e}`;
+    const msg = `更新失败：${e?.message || e}。未刷新页面，请检查网络、扩展安装方式或服务端日志。`;
     status.text(msg);
     toastr?.error?.(msg);
+    updateButton.prop('disabled', false).text(originalText);
+    reloadButton.prop('disabled', false);
   }
 }
 
