@@ -9,6 +9,15 @@ import { openPanel } from './src/panel.js';
 import { openApiConfig } from './src/api-config.js';
 import { openMonitor } from './src/monitor.js';
 import {
+  initializeAutoSummary,
+  loadAutoSummaryConfig,
+  loadAutoSummaryState,
+  saveAutoSummaryConfig,
+  retryAutoSummary,
+  rollbackAutoSummaryAfterFloor,
+  syncAutoHiddenMessages,
+} from './src/auto-summary.js';
+import {
   migrateIfNeeded,
   detectLegacyArtifacts,
   cleanupLegacyArtifacts,
@@ -37,9 +46,11 @@ function getSettings() {
       recallVersion: 'v34',
       customPrompts: {},
       showChatBarButtons: false,
+      panelTheme: 'dark',
     };
   }
   if (typeof s._global.showChatBarButtons !== 'boolean') s._global.showChatBarButtons = false;
+  if (!['dark', 'light'].includes(s._global.panelTheme)) s._global.panelTheme = 'dark';
   return s._global;
 }
 
@@ -100,7 +111,26 @@ window.MemoryPilot = {
   getMemoryRecoverySnapshots,
   restoreMemoriesFromSnapshot,
   flushStorageNow,
+  loadAutoSummaryConfig,
+  loadAutoSummaryState,
+  saveAutoSummaryConfig,
+  retryAutoSummary,
+  rollbackAutoSummaryAfterFloor,
+  syncAutoHiddenMessages,
 };
+
+async function setOfficialMessageVisibility(start, end, unhide) {
+  const { hideChatMessageRange } = await import('../../../chats.js');
+  if (typeof hideChatMessageRange !== 'function') {
+    throw new Error('当前 SillyTavern 版本不支持安全隐藏聊天楼层');
+  }
+  await hideChatMessageRange(start, end, unhide);
+}
+
+async function saveOfficialChat() {
+  const { saveChatConditional } = await import('../../../script.js');
+  if (typeof saveChatConditional === 'function') await saveChatConditional();
+}
 
 // ====== Wand Menu (Extensions Menu / 魔法棒) Buttons ======
 
@@ -233,6 +263,13 @@ function buildSettingsHtml() {
               <input type="checkbox" id="mp_show_chat_buttons" ${settings.showChatBarButtons ? 'checked' : ''}>
               显示输入区快捷按钮（QR 上方）
             </label>
+            <div style="display:flex;align-items:center;gap:8px">
+              <label style="min-width:80px">面板主题</label>
+              <select id="mp_panel_theme" class="text_pole" style="flex:1">
+                <option value="dark" ${settings.panelTheme === 'dark' ? 'selected' : ''}>深色（保留当前配色）</option>
+                <option value="light" ${settings.panelTheme === 'light' ? 'selected' : ''}>浅色（参考包配色）</option>
+              </select>
+            </div>
             <div class="mp-info" style="font-size:11px;opacity:0.6;line-height:1.5">
               存储: extensionSettings · 零 /setvar · 不被 LWB 快照
             </div>
@@ -377,6 +414,15 @@ function bindSettingsEvents() {
     saveSettings();
     syncChatBarButtons();
   });
+  $('#mp_panel_theme').on('change', function() {
+    getSettings().panelTheme = this.value === 'light' ? 'light' : 'dark';
+    saveSettings();
+    const panelWasOpen = Boolean(document.getElementById('mp_main_panel'));
+    if (panelWasOpen) {
+      openPanel();
+      setTimeout(() => openPanel(), 0);
+    }
+  });
   $('#mp_show_logs').on('click', renderStorageLogBox);
   $('#mp_copy_logs').on('click', copyStorageLogs);
   $('#mp_clear_logs').on('click', function() {
@@ -407,6 +453,9 @@ function hookRecall() {
     ctx.eventSource.on(ctx.eventTypes.MESSAGE_DELETED, async () => {
       try {
         const result = await handleChatMessageDeleted();
+        if (Number.isFinite(result.deletedFloor)) {
+          await rollbackAutoSummaryAfterFloor(result.deletedFloor);
+        }
         if (result.removed > 0) {
           toastr?.info?.(`已回退到第 ${result.deletedFloor} 楼，移除 ${result.removed} 条受影响记忆`);
         }
@@ -490,4 +539,8 @@ jQuery(async () => {
   });
 
   hookRecall();
+  initializeAutoSummary({
+    setMessageVisibility: setOfficialMessageVisibility,
+    saveChat: saveOfficialChat,
+  });
 });

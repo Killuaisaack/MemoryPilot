@@ -1,1 +1,2 @@
 tests/storage-backup-restore.test.mjs
+tests/recall-regression.test.mjs

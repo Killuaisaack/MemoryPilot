@@ -95,9 +95,9 @@ export async function openApiConfig() {
   const st = document.createElement('style');
   st.id = STYLE;
   st.textContent = `
-    #${PANEL} { position:fixed!important;inset:0!important;z-index:10002;display:grid!important;place-items:center!important;width:100vw!important;height:100vh!important;height:100dvh!important;margin:0!important;padding:max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)) 12px;box-sizing:border-box!important;overflow:hidden!important;transform:none!important;font-family:-apple-system,sans-serif;isolation:isolate; }
+    #${PANEL} { position:fixed;inset:0;z-index:10002;display:flex;align-items:flex-start;justify-content:center;padding:max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)) 12px;box-sizing:border-box;font-family:-apple-system,sans-serif; }
     #${PANEL} .mask { position:absolute;inset:0;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px); }
-    #${PANEL} .mp-dialog-card { position:relative!important;inset:auto!important;float:none!important;width:100%!important;max-width:560px!important;max-height:100%!important;margin:0!important;transform:none!important;box-sizing:border-box!important;background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);padding:20px;box-shadow:0 16px 48px rgba(0,0,0,0.5);overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y; }
+    #${PANEL} .card { position:relative;width:100%;max-width:560px;max-height:calc(100dvh - max(24px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));background:#222327;border-radius:14px;border:1px solid rgba(255,255,255,0.08);padding:20px;box-shadow:0 16px 48px rgba(0,0,0,0.5);overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain; }
     #${PANEL} h3 { margin:0 24px 16px 0;color:#fff;font-size:16px; }
     #${PANEL} .f { margin-bottom:12px; }
     #${PANEL} .f label { display:block;color:#aaa;font-size:11px;margin-bottom:3px; }
@@ -116,14 +116,57 @@ export async function openApiConfig() {
     #${PANEL} .status.err { background:rgba(248,113,113,0.12);color:#f87171; }
     @media(max-width:560px) {
       #${PANEL} { padding:max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)) 8px; }
-      #${PANEL} .mp-dialog-card { max-width:100%!important;padding:16px;border-radius:10px; }
+      #${PANEL} .card { max-width:100%;max-height:calc(100dvh - max(16px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));padding:16px;border-radius:10px; }
       #${PANEL} .row { flex-direction:column;align-items:stretch; }
       #${PANEL} .row .btn { width:100%; }
     }
     @media(max-width:420px) {
       #${PANEL} { padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0; }
-      #${PANEL} .mp-dialog-card { border-radius:0;border-left:none;border-right:none;padding:14px 12px; }
+      #${PANEL} .card { border-radius:0;max-height:100dvh;border-left:none;border-right:none;padding:14px 12px; }
       #${PANEL} h3 { font-size:15px; }
+    }
+    /* ===== MemoryPilot Day — unified settings surface ===== */
+    #${PANEL}{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#352f3c}
+    #${PANEL} .mask{background:rgba(55,48,63,.22);backdrop-filter:blur(3px)}
+    #${PANEL} .card{max-width:760px;background:#f8f6fb;border-color:#ddd7e5;padding:0;box-shadow:0 18px 54px rgba(63,51,76,.18);color-scheme:light}
+    #${PANEL} .topline{display:flex;align-items:center;justify-content:space-between;padding:13px 18px;background:#fff;border-bottom:1px solid #e8e3ed}
+    #${PANEL} .topactions{display:flex;align-items:center;gap:4px}
+    #${PANEL} .help{width:28px;height:28px;border:0;border-radius:50%;background:transparent;color:#756d7e;font-size:17px;cursor:pointer}
+    #${PANEL} .help:hover{color:#3f3748;background:#f0ecf5}
+    #${PANEL} h3{margin:0;color:#302a37;font-size:18px;letter-spacing:.01em}
+    #${PANEL} .close{position:static;color:#756d7e;background:transparent}
+    #${PANEL} .close:hover{color:#3f3748;background:#f0ecf5}
+    #${PANEL} .hubnav{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px 12px;background:#fff;border-bottom:1px solid #e8e3ed}
+    #${PANEL} .hubtab{min-height:38px;border:1px solid #ded8e6;border-radius:10px;background:#faf9fb;color:#625a6b;font-size:12px;font-weight:600;cursor:pointer}
+    #${PANEL} .hubtab:hover{background:#f1edf6;border-color:#c9bfd8}
+    #${PANEL} .hubtab.on{background:#ebe5f4;border-color:#b7a8cb;color:#675181}
+    #${PANEL} .settingsnav{display:flex;gap:6px;overflow-x:auto;padding:8px 14px;background:#f4f1f7;border-bottom:1px solid #e3dfe8;scrollbar-width:none}
+    #${PANEL} .settingsnav::-webkit-scrollbar{display:none}
+    #${PANEL} .settab{flex:0 0 auto;padding:7px 12px;border:1px solid #ddd7e5;border-radius:8px;background:#fff;color:#665e6f;font-size:11px;cursor:pointer}
+    #${PANEL} .settab.on{background:#e9e1f2;color:#694f85;border-color:#b9a7cd}
+    #${PANEL} .formbody{padding:16px 18px 20px}
+    #${PANEL} .sectionintro{margin:0 0 14px;color:#4a424f;font-size:13px;font-weight:700}
+    #${PANEL} .f label{color:#5d5565;font-size:12px;margin-bottom:5px}
+    #${PANEL} .f input,#${PANEL} .f select{min-height:42px;padding:9px 11px;background:#fff!important;color:#342e3a!important;border:1px solid #d9d3e0!important;box-shadow:none!important;filter:none!important;text-shadow:none!important;-webkit-appearance:auto;appearance:auto}
+    #${PANEL} .f input:focus,#${PANEL} .f select:focus{border-color:#9e88b8!important;box-shadow:0 0 0 3px rgba(126,102,155,.12)!important}
+    #${PANEL} .f input::placeholder{color:#a39ba9}
+    #${PANEL} .btn{background:#fff;border-color:#d8d2df;color:#504858;box-shadow:none}
+    #${PANEL} .btn:hover{background:#f0ecf4;color:#3e3547}
+    #${PANEL} .btn-p{background:#e9e1f2;border-color:#b9a7cd;color:#674f80}
+    #${PANEL} .btn-p:hover{background:#ded2eb;color:#533b6d}
+    #${PANEL} .hint{color:#766e7e}
+    #${PANEL} .status.ok{background:#e7f4ea;color:#3f7450}
+    #${PANEL} .status.err{background:#fbe9ea;color:#a84450}
+    @media(max-width:560px){
+      #${PANEL}{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0}
+      #${PANEL} .card{max-height:100dvh;border-radius:0;border-left:0;border-right:0}
+      #${PANEL} .topline{padding:11px 13px}
+      #${PANEL} .hubnav{padding:7px 8px;gap:5px}
+      #${PANEL} .hubtab{min-height:36px;font-size:11px}
+      #${PANEL} .settingsnav{padding:7px 9px}
+      #${PANEL} .formbody{padding:14px 12px 20px}
+      #${PANEL} .row{flex-direction:row;flex-wrap:wrap}
+      #${PANEL} .row .btn{width:auto;flex:1}
     }
   `;
   document.head.appendChild(st);
@@ -132,9 +175,21 @@ export async function openApiConfig() {
   root.id = PANEL;
   root.innerHTML = `
     <div class="mask"></div>
-    <div class="mp-dialog-card">
-      <button class="close" id="mpa_close">&times;</button>
-      <h3>Memory Pilot - API 配置</h3>
+    <div class="card">
+      <div class="topline"><h3>MemoryPilot</h3><div class="topactions"><button class="help" id="mpa_help" aria-label="打开新手指引" title="新手指引">?</button><button class="close" id="mpa_close" aria-label="关闭">&times;</button></div></div>
+      <nav class="hubnav" aria-label="MemoryPilot 主导航">
+        <button class="hubtab" data-hub="memory">记忆管理</button>
+        <button class="hubtab" data-hub="monitor">召回监控</button>
+        <button class="hubtab on" data-hub="settings">设置</button>
+      </nav>
+      <nav class="settingsnav" aria-label="设置分类">
+        <button class="settab on">API 配置</button>
+        <button class="settab" data-open-panel="recall">召回设置</button>
+        <button class="settab" data-open-panel="filter">文本过滤</button>
+        <button class="settab" data-open-panel="data">数据管理</button>
+      </nav>
+      <div class="formbody">
+      <div class="sectionintro">楼层总结与关键词处理 API</div>
 
       <div class="f">
         <label>Provider</label>
@@ -175,9 +230,14 @@ export async function openApiConfig() {
 
       <button class="btn btn-p" id="mpa_save" style="width:100%;padding:10px;font-size:13px;">保存</button>
       <div id="mpa_status"></div>
+      </div>
     </div>
   `;
   document.body.appendChild(root);
+  root.querySelector('[data-hub="memory"]')?.addEventListener('click', () => window.MemoryPilot?.openPanel?.('list'));
+  root.querySelector('[data-hub="monitor"]')?.addEventListener('click', () => window.MemoryPilot?.openMonitor?.());
+  $('mpa_help').onclick = async () => { await window.MemoryPilot?.openPanel?.('list'); setTimeout(() => document.getElementById('mp_help')?.click(), 180); };
+  root.querySelectorAll('[data-open-panel]').forEach(btn => btn.addEventListener('click', () => window.MemoryPilot?.openPanel?.('cfg', btn.getAttribute('data-open-panel'))));
 
   const applyProviderUI = (mode) => {
     const def = defaultsByProvider[mode] || defaultsByProvider.openai;

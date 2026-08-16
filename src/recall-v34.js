@@ -1,6 +1,8 @@
 // MemoryPilot Recall Engine - auto-transformed from taskjs
 // Storage: extensionSettings (NOT chatMetadata)
 // Prompt injection: chatMetadata.variables only
+import { saveRecallSnapshot } from './recall-monitor-state.js';
+import { createAnimaDedupeSession } from './anima-dedupe.js';
 
 export async function runRecall() {
 (async () => {
@@ -212,7 +214,7 @@ export async function runRecall() {
     return text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
   };
 
-  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6 };
+  const DEF_RECALL_SETTINGS = { every: 1, alpha: 0.72, stickyTurns: 5, contextWindow: 8, maxRecall: 6, animaDedupe: true };
   const normalizeRecallSettings = (cfg) => {
     const src = cfg && typeof cfg === 'object' ? cfg : {};
     return {
@@ -220,7 +222,8 @@ export async function runRecall() {
       alpha: clamp(Number.isFinite(Number(src.alpha)) ? Number(src.alpha) : DEF_RECALL_SETTINGS.alpha, 0, 0.95),
       stickyTurns: clamp(Math.round(Number(src.stickyTurns) ?? DEF_RECALL_SETTINGS.stickyTurns), 0, 20),
       contextWindow: clamp(Math.round(Number(src.contextWindow) || DEF_RECALL_SETTINGS.contextWindow), 3, 30),
-      maxRecall: clamp(Math.round(Number(src.maxRecall) || DEF_RECALL_SETTINGS.maxRecall), 1, 20)
+      maxRecall: clamp(Math.round(Number(src.maxRecall) || DEF_RECALL_SETTINGS.maxRecall), 1, 20),
+      animaDedupe: src.animaDedupe !== false
     };
   };
 
@@ -337,13 +340,54 @@ export async function runRecall() {
     return out;
   };
 
+  const monitorRecent = chat.slice(-CTX_MSGS);
+  const sourceMessages = monitorRecent.map((m, index) => {
+    const raw = String(m?.mes || '');
+    return {
+      floor: chat.length - monitorRecent.length + index + 1,
+      speaker: m?.is_user ? '用户' : 'AI',
+      raw,
+      cleaned: cleanerCfg.cleanForRecall ? applyCleaner(raw, cleanerCfg) : raw,
+    };
+  });
+  const compactMemory = (m, fallbackReason = '') => ({
+    id: m?.id ?? '',
+    event: String(m?.event || ''),
+    summary: String(m?.summary || ''),
+    priority: m?.priority || 'medium',
+    reason: String(m?._reason || fallbackReason || ''),
+  });
+  let animaDedupe = { active: false, removedIds: new Set(), filter: list => list, isDuplicate: () => false };
+  const recordSnapshot = ({ evaluated, pinned = [], triggered = [], note = '' }) => {
+    saveRecallSnapshot({
+      version: 'v34',
+      generationType: 'message_received',
+      evaluated: !!evaluated,
+      contextWindow: CTX_MSGS,
+      recallEvery: RECALL_EVERY,
+      maxRecall: MAX_RECALL,
+      stickyTurns: recallCfg.stickyTurns ?? 5,
+      animaDedupeEnabled: recallCfg.animaDedupe !== false,
+      animaDedupeActive: !!animaDedupe.active,
+      animaDedupeRemoved: animaDedupe.removedIds?.size || 0,
+      sources: sourceMessages,
+      pinned: pinned.map(m => compactMemory(m, '常驻')),
+      triggered: triggered.map(m => compactMemory(m)),
+      note,
+    });
+  };
+
   let memories = await loadJson(MK, []);
   if (!Array.isArray(memories) || !memories.length) {
     await saveText('mp_recall_pin', '');
     await saveText('mp_recall_ctx', '');
+    recordSnapshot({ evaluated: true, note: '记忆列表为空，本轮没有可召回的记忆。' });
     return;
   }
   memories = dedupeByFingerprint(memories);
+  const sourceMemoryById = new Map(memories.map(memory => [String(memory?.id ?? ''), memory]));
+  animaDedupe = await createAnimaDedupeSession({ enabled: recallCfg.animaDedupe, context: ctx });
+  memories = animaDedupe.filter(memories);
 
   const turnCounter = Math.max(0, Number(metaRoot().turnCounter || 0)) + 1;
   await syncMeta({ turnCounter, recallEvery: RECALL_EVERY });
@@ -364,7 +408,8 @@ export async function runRecall() {
     const stickyMems = [];
     for (const [sid, st] of Object.entries(stickyRaw)) {
       if (st.turnsLeft > 0 && st.event && st.summary) {
-        stickyMems.push(st);
+        const candidate = { ...(sourceMemoryById.get(String(sid)) || {}), ...st, id: sid, _reason: '粘性保持' };
+        if (!animaDedupe.isDuplicate(candidate)) stickyMems.push(st);
       }
     }
     const fmtCtx = stickyMems.map(s => `[${s.event}] ${s.summary}`).join('\n');
@@ -373,11 +418,13 @@ export async function runRecall() {
     // 衰减 sticky
     const nextSticky = {};
     for (const [sid, st] of Object.entries(stickyRaw)) {
-      if (st.turnsLeft > 1) {
+      const candidate = { ...(sourceMemoryById.get(String(sid)) || {}), ...st, id: sid };
+      if (st.turnsLeft > 1 && !animaDedupe.isDuplicate(candidate)) {
         nextSticky[sid] = { ...st, turnsLeft: st.turnsLeft - 1 };
       }
     }
     await syncMeta({ stickyState: nextSticky });
+    recordSnapshot({ evaluated: false, pinned: pinnedOnly, triggered: stickyMems, note: `本轮沿用粘性召回；每 ${RECALL_EVERY} 轮重新匹配一次。` });
     return;
   }
 
@@ -562,7 +609,8 @@ export async function runRecall() {
   }
   // 未触发但还在 sticky 期的保持（衰减）
   for (const [sid, st] of Object.entries(stickyRaw)) {
-    if (!triggeredIds.has(sid) && st.turnsLeft > 1) {
+    const candidate = { ...(sourceMemoryById.get(String(sid)) || {}), ...st, id: sid };
+    if (!triggeredIds.has(sid) && st.turnsLeft > 1 && !animaDedupe.isDuplicate(candidate)) {
       nextSticky[sid] = { ...st, turnsLeft: st.turnsLeft - 1 };
     }
   }
@@ -583,5 +631,6 @@ export async function runRecall() {
 
   await saveText('mp_recall_pin', fmtPin);
   await saveText('mp_recall_ctx', fmtCtx);
+  recordSnapshot({ evaluated: true, pinned: finalPinned, triggered: finalWithSticky });
 })();
 }
