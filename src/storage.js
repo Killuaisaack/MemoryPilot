@@ -796,6 +796,7 @@ export async function migrateIfNeeded() {
 // ====== Chat isolation ======
 
 let _prevChatKey = null;
+let _chatMessageSnapshot = [];
 
 function cloneStoredValue(value) {
   try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
@@ -866,9 +867,80 @@ export async function onChatChanged() {
     try { localStorage.removeItem('mp_memories_' + _prevChatKey); } catch {}
   }
   _prevChatKey = newKey;
+  captureChatMessageSnapshot();
   // 重置迁移标记（不同聊天可能需要迁移）
   // 但实际迁移检查在 migrateIfNeeded 内部做
   return recovery;
+}
+
+function getChatMessageFingerprint(message) {
+  if (!message || typeof message !== 'object') return '';
+  return JSON.stringify([
+    message.mes ?? '',
+    message.name ?? '',
+    message.is_user ?? false,
+    message.send_date ?? '',
+  ]);
+}
+
+function getCurrentChatMessages() {
+  const chat = getCtx()?.chat;
+  return Array.isArray(chat) ? chat : [];
+}
+
+export function captureChatMessageSnapshot() {
+  _chatMessageSnapshot = getCurrentChatMessages().map(getChatMessageFingerprint);
+}
+
+function findDeletedChatFloor(previous, current) {
+  if (!Array.isArray(previous) || !Array.isArray(current) || current.length >= previous.length) {
+    return null;
+  }
+
+  const firstMismatch = current.findIndex((message, index) => message !== previous[index]);
+  return (firstMismatch < 0 ? current.length : firstMismatch) + 1;
+}
+
+function getMemoryFloorSegments(memory) {
+  const rawSegments = Array.isArray(memory?.floorSegments)
+    ? memory.floorSegments
+    : (Array.isArray(memory?.floorRange) ? [memory.floorRange] : []);
+
+  return rawSegments
+    .filter(segment => Array.isArray(segment) && segment.length >= 2)
+    .map(segment => [Number(segment[0]), Number(segment[1])])
+    .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end));
+}
+
+function memoryAffectedByDeletedFloor(memory, deletedFloor) {
+  const segments = getMemoryFloorSegments(memory);
+  if (!segments.length) return false;
+  // A deletion shifts every later floor, so memories touching or following
+  // the deleted floor can no longer be trusted against the current chat.
+  return segments.some(([, end]) => end >= deletedFloor);
+}
+
+/**
+ * Rewinds memories after a chat message is deleted. Memories without a floor
+ * association are intentionally kept because they may be manually authored.
+ */
+export async function handleChatMessageDeleted() {
+  const current = getCurrentChatMessages().map(getChatMessageFingerprint);
+  const deletedFloor = findDeletedChatFloor(_chatMessageSnapshot, current);
+  _chatMessageSnapshot = current;
+
+  if (!deletedFloor) return { deletedFloor: null, removed: 0 };
+
+  const memories = await loadMemories();
+  const retained = memories.filter(memory => !memoryAffectedByDeletedFloor(memory, deletedFloor));
+  const removed = memories.length - retained.length;
+
+  if (removed > 0) {
+    await saveMemories(retained);
+    logOp('rollback', 'memories', `deleted floor #${deletedFloor}; removed ${removed}`);
+  }
+
+  return { deletedFloor, removed };
 }
 
 // ====== Sticky State (stored in extensionSettings, not chat metadata) ======

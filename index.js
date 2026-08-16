@@ -20,6 +20,8 @@ import {
   getMemoryRecoverySnapshots,
   restoreMemoriesFromSnapshot,
   flushStorageNow,
+  captureChatMessageSnapshot,
+  handleChatMessageDeleted,
 } from './src/storage.js';
 
 const MODULE_NAME = 'MemoryPilot';
@@ -397,6 +399,20 @@ function hookRecall() {
     const ctx = SillyTavern.getContext();
     ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, async () => {
       try { await runRecall(); } catch (e) { console.error('[MP] Recall error:', e); }
+      captureChatMessageSnapshot();
+    });
+    ctx.eventSource.on(ctx.eventTypes.MESSAGE_SENT, captureChatMessageSnapshot);
+    ctx.eventSource.on(ctx.eventTypes.MESSAGE_EDITED, captureChatMessageSnapshot);
+    ctx.eventSource.on(ctx.eventTypes.MESSAGE_SWIPED, captureChatMessageSnapshot);
+    ctx.eventSource.on(ctx.eventTypes.MESSAGE_DELETED, async () => {
+      try {
+        const result = await handleChatMessageDeleted();
+        if (result.removed > 0) {
+          toastr?.info?.(`已回退到第 ${result.deletedFloor} 楼，移除 ${result.removed} 条受影响记忆`);
+        }
+      } catch (e) {
+        console.warn('[MP] message deletion memory rollback err', e);
+      }
     });
     ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, async () => {
       try {
