@@ -30,4 +30,14 @@ const fixedResult = parseSummaryMemories(
 );
 assert.equal(fixedResult[0].priority, 'low', '统一指定类型仍应覆盖 AI 建议');
 
+const cappedHighResult = parseSummaryMemories([
+  JSON.stringify({ event: '核心1', summary: 'a', priority: 'high' }),
+  JSON.stringify({ event: '核心2', summary: 'b', priority: 'high' }),
+  JSON.stringify({ event: '核心3', summary: 'c', priority: 'high' }),
+  JSON.stringify({ event: '事件4', summary: 'd', priority: 'medium' }),
+  JSON.stringify({ event: '事件5', summary: 'e', priority: 'low' }),
+].join('\n'), { startFloor: 1, endFloor: 20, source: 'auto_batch', priorityMode: 'ai' });
+assert.equal(cappedHighResult.filter(item => item.priority === 'high').length, 1, '自动总结的常驻记忆应尽量少');
+assert.equal(cappedHighResult[1].priority, 'medium', '超出常驻配额的内容应回落为主要触发');
+
 console.log('auto-summary regression tests passed');

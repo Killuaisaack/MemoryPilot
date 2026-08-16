@@ -433,14 +433,16 @@ export function initializeAutoSummary(options = {}) {
   const ctx = globalThis.SillyTavern?.getContext?.();
   if (!ctx?.eventSource || hookedContext === ctx) return;
   hookedContext = ctx;
-  ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, () => {
-    setTimeout(async () => {
-      const current = globalThis.SillyTavern?.getContext?.();
-      const last = current?.chat?.[current.chat.length - 1];
-      if (!last || last.is_user || last.is_system) return;
-      await runAutoSummary();
-    }, 350);
-  });
+  const runBeforeNextGeneration = async () => {
+    const current = globalThis.SillyTavern?.getContext?.();
+    const last = current?.chat?.[current.chat.length - 1];
+    if (!last || !last.is_user || last.is_system) return;
+    await runAutoSummary();
+  };
+  // MESSAGE_SENT fires after the user's message is appended and before the
+  // next character generation, which lets the summary enter that generation's
+  // context. Keep MESSAGE_RECEIVED reserved for the normal recall engine.
+  if (ctx.eventTypes.MESSAGE_SENT) ctx.eventSource.on(ctx.eventTypes.MESSAGE_SENT, runBeforeNextGeneration);
   ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, () => {
     setTimeout(() => syncAutoHiddenMessages().catch(error => console.warn('[MP] Auto-hide sync failed:', error)), 600);
   });

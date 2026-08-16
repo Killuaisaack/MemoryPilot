@@ -1770,7 +1770,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
             <div class="autosummarygrid">
               <div class="fg"><label>自动总结间隔（楼层）</label><input id="mp_auto_interval" type="number" min="2" max="200" value="20"></div>
               <div class="fg"><label>开始总结楼层</label><input id="mp_auto_start" type="number" min="1" value="1"></div>
-              <div class="fg"><label>总结后的记忆如何导入</label><select id="mp_auto_priority_mode"><option value="ai">按 AI 建议导入</option><option value="fixed">按指定类型导入</option></select><div class="ht" style="margin-top:5px">按 AI 建议导入时，AI 会分别判断哪些内容应常驻、主要触发或次级触发；按指定类型导入则会把本次结果统一归为你选择的类型。</div></div>
+              <div class="fg"><label>总结后的记忆如何导入</label><select id="mp_auto_priority_mode"><option value="ai">按 AI 建议导入</option><option value="fixed">按指定类型导入</option></select><div class="ht" style="margin-top:5px">按 AI 建议导入时，AI 会分别判断哪些内容应常驻、主要触发或次级触发。常驻只用于跨聊天仍成立、绝不能忘的核心设定，普通事件会更多落在主要触发或次级触发；按指定类型导入则会把本次结果统一归为你选择的类型。</div></div>
               <div class="fg" id="mp_auto_fixed_wrap"><label>指定导入类型</label><select id="mp_auto_fixed"><option value="high">常驻</option><option value="medium">主要触发</option><option value="low">次级触发</option></select></div>
             </div>
             <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:2px"><label class="mp-check"><input type="checkbox" id="mp_auto_hide">总结成功后隐藏旧楼层</label></div>

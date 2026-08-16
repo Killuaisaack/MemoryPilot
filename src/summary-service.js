@@ -38,7 +38,7 @@ timeLabel 必须输出；没有精确时刻写"当晚/第X天/第X-Y层"。
 timeValue 用故事内时间，有时写"时×60+分"，没有写 null。
 floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话中的 #楼层号 标记确定。必须精确到该事件实际发生的楼层，不要使用整个输入范围。
 
-priority：核心设定/绝不能忘=high，关键事件=medium，氛围/日常=low。
+priority：请严格控制常驻（high）的数量。只有跨聊天仍然成立、长期不变、绝不能忘的核心设定/硬性事实才使用 high；普通关键事件使用 medium，氛围、日常、一次性互动使用 low。一个总结批次中 high 尽量不超过 1 条，绝大多数内容应为 medium 或 low。不要因为事件重要、情绪强烈或摘要写得详细就标为 high。
 
 只输出 JSON，每行一个，不要解释。
 
@@ -315,7 +315,7 @@ export function parseSummaryMemories(raw, options = {}) {
   const useAiPriority = options.priorityMode === 'ai';
   const source = options.source || 'batch';
   const now = Date.now();
-  return extractAllJsonObjects(raw).filter(x => x?.event && x?.summary).map((item, index) => {
+  const parsed = extractAllJsonObjects(raw).filter(x => x?.event && x?.summary).map((item, index) => {
     const itemRange = Array.isArray(item.floorRange) && item.floorRange.length >= 2
       ? [Number(item.floorRange[0]), Number(item.floorRange[1])]
       : [startFloor, endFloor];
@@ -338,4 +338,20 @@ export function parseSummaryMemories(raw, options = {}) {
       aiSuggestedPriority: normalizePriority(item.priority),
     };
   });
+  // Automatic batches should keep the always-on tier deliberately small.
+  // This only affects AI-assisted auto summaries; manual summaries and the
+  // explicit fixed-priority mode retain their requested priority unchanged.
+  if (useAiPriority && source === 'auto_batch') {
+    const highLimit = Math.max(1, Math.ceil(parsed.length * 0.15));
+    let highCount = 0;
+    for (const memory of parsed) {
+      if (memory.priority !== 'high') continue;
+      highCount += 1;
+      if (highCount > highLimit) {
+        memory.priority = 'medium';
+        memory.aiSuggestedPriority = 'medium';
+      }
+    }
+  }
+  return parsed;
 }
