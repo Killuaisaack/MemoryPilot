@@ -1605,8 +1605,33 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
       #${P} .helpbtn,#${P} .cls{color:#888!important}
       #${P} .helpbtn:hover,#${P} .cls:hover{background:rgba(255,255,255,.1)!important;color:#fff!important}
       #${P} .searchtools{background:rgba(0,0,0,.2)!important;border-color:rgba(255,255,255,.08)!important}
+      #${P} .memoryhelp,#${P} .memoryfilter,#${P} .memoryhelpbody,#${P} .memoryfilterbody,#${P} .sourcestatus,#${P} .mergesetup,#${P} .batchresultactions{background:rgba(255,255,255,.025)!important;border-color:rgba(255,255,255,.08)!important;color:#bbb!important;box-shadow:none!important}
+      #${P} .memoryhelpbody h5,#${P} .memoryhelpsection h5{background:rgba(124,107,240,.14)!important;color:#ddd!important}
+      #${P} .memoryhelpsection+.memoryhelpsection{border-color:rgba(255,255,255,.08)!important}
+      #${P} .memoryhelpsection p,#${P} .memoryhelpsection p>b,#${P} .sourcestatus{color:#bbb!important}
       #${P} .memoryhelpbody,#${P} .memoryfilterbody{color:#bbb!important}
       #${P} .memoryhelp>summary,#${P} .memoryfilter>summary{color:#c4b5fd!important}
+      #${P} .filtersearch input,#${P} .fr input,#${P} .fr select{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important}
+      #${P} .mergesetuptitle,#${P} .cfgtitle,#${P} .prompttitle,#${P} .automanualtitle{color:#ddd!important}
+      #${P} .kwmode{background:rgba(0,0,0,.3)!important;border-color:rgba(255,255,255,.12)!important}
+      #${P} .kwmodebtn{background:transparent!important;border-color:rgba(255,255,255,.1)!important;color:#bbb!important}
+      #${P} .kwmodebtn.on{background:rgba(124,107,240,.25)!important;color:#c4b5fd!important}
+      #${P} .advancedprompts,#${P} .advancedprompts>summary,#${P} .promptcard{color:#bbb!important}
+      #${P} .promptcard+.promptcard{border-color:rgba(255,255,255,.08)!important}
+      #${P} .promptnote{color:#999!important}
+      #${P} .cleaneditor,#${P} .guideprompt{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important;box-shadow:none!important}
+      #${P} .cleanupresult,#${P} .autosummarystatus{background:rgba(255,255,255,.03)!important;border-color:rgba(255,255,255,.08)!important;color:#aaa!important}
+      #${P} .ctxbox{background:#222327!important;color:#ddd!important}
+      #${P} .ctxbox>div:first-child{background:#222327!important;border-color:rgba(255,255,255,.08)!important}
+      #${P} .ctxline{color:#ddd!important;border-color:rgba(255,255,255,.08)!important}
+      #${P} .tiny{color:#999!important}
+      #${P} [style*="background:#fff"],#${P} [style*="background: #fff"],#${P} [style*="background:#faf9fb"],#${P} [style*="background:#f8f6fb"],#${P} [style*="background:#f4f1f7"]{background:#222327!important;color:#ddd!important;border-color:rgba(255,255,255,.08)!important}
+      #${P} [style*="color:#342e3a"],#${P} [style*="color: #342e3a"]{color:#eee!important}
+      #${P} .cfgsubnav{border-color:rgba(255,255,255,.08)!important}
+      #${P} .guidestep,#${P} .guidebranch{background:rgba(255,255,255,.025)!important;border-color:rgba(255,255,255,.08)!important;color:#bbb!important}
+      #${P} .guidebox{background:#24252a!important;border-color:rgba(255,255,255,.12)!important}
+      #${P} .guideintro,#${P} .guidestep p,#${P} .guideinject ul,#${P} .guidebranch b,#${P} .guidenote{color:#aaa!important}
+      #${P} .guidenote{background:rgba(124,107,240,.1)!important}
       #${P} .btn{background:rgba(255,255,255,.05)!important;border-color:rgba(255,255,255,.15)!important;color:#ddd!important}
       #${P} .fg input,#${P} .fg textarea,#${P} .fg select,#${P} #mp_f_search{background:rgba(0,0,0,.3)!important;color:#eee!important;border-color:rgba(255,255,255,.1)!important}
       #${P} label,#${P} .fg label,#${P} .ht,#${P} .memoryhelpbody,#${P} .memoryfilterbody{color:#aaa!important}
