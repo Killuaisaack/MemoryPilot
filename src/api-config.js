@@ -47,9 +47,20 @@ export async function openApiConfig() {
     if (!c.extensionSettings[_EXT_NAME][ck]) c.extensionSettings[_EXT_NAME][ck] = {};
     return c.extensionSettings[_EXT_NAME][ck];
   };
+  const _getGlobalStore = () => {
+    const c = window.SillyTavern?.getContext?.();
+    if (!c?.extensionSettings) return null;
+    if (!c.extensionSettings[_EXT_NAME]) c.extensionSettings[_EXT_NAME] = {};
+    if (!c.extensionSettings[_EXT_NAME]._global) c.extensionSettings[_EXT_NAME]._global = {};
+    return c.extensionSettings[_EXT_NAME]._global;
+  };
   let _saveTimer = null;
-  const _saveDebounced = () => {
+  const _saveDebounced = (immediate = false) => {
     clearTimeout(_saveTimer);
+    if (immediate) {
+      try { window.SillyTavern?.getContext?.()?.saveSettingsDebounced?.(); } catch {}
+      return;
+    }
     _saveTimer = setTimeout(() => {
       try { window.SillyTavern?.getContext?.()?.saveSettingsDebounced?.(); } catch {}
     }, 10000);
@@ -72,17 +83,41 @@ export async function openApiConfig() {
   };
 
   const load = async () => {
-    try { const r = localStorage.getItem(SKEY); if (r && r.trim()) return JSON.parse(r); } catch {}
-    try { const store = _getStore(); if (store && store[SKEY]) return store[SKEY]; } catch {}
+    // API 配置是跨浏览器的全局设置：服务端数据优先，localStorage 仅作缓存。
+    try {
+      const globalStore = _getGlobalStore();
+      if (globalStore && globalStore[SKEY] && typeof globalStore[SKEY] === 'object') {
+        try { localStorage.setItem(SKEY, JSON.stringify(globalStore[SKEY])); } catch {}
+        return globalStore[SKEY];
+      }
+    } catch {}
+    // 兼容旧版本按聊天/角色保存的配置，并自动迁移到全局。
+    try {
+      const legacyStore = _getStore();
+      if (legacyStore && legacyStore[SKEY] && typeof legacyStore[SKEY] === 'object') {
+        const migrated = legacyStore[SKEY];
+        const globalStore = _getGlobalStore();
+        if (globalStore) {
+          globalStore[SKEY] = migrated;
+          _saveDebounced(true);
+        }
+        try { localStorage.setItem(SKEY, JSON.stringify(migrated)); } catch {}
+        return migrated;
+      }
+    } catch {}
     try { const meta = ctx.chatMetadata?.extensions?.['MemoryPilot']; if (meta && meta[SKEY]) return meta[SKEY]; } catch {}
+    try { const r = localStorage.getItem(SKEY); if (r && r.trim()) return JSON.parse(r); } catch {}
     return {};
   };
 
   const save = async c => {
     const text = JSON.stringify(c || {});
     try { localStorage.setItem(SKEY, text); } catch {}
-    const store = _getStore();
-    if (store) { store[SKEY] = c || {}; _saveDebounced(); }
+    const globalStore = _getGlobalStore();
+    if (globalStore) {
+      globalStore[SKEY] = c || {};
+      _saveDebounced(true);
+    }
   };
 
   if ($(PANEL)) { $(PANEL).remove(); $(STYLE)?.remove(); return; }

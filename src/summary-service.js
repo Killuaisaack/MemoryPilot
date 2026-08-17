@@ -169,7 +169,32 @@ function getCurrentStore(ctx) {
   return root[key] || null;
 }
 
+function getGlobalStore(ctx) {
+  if (!ctx?.extensionSettings) return null;
+  const root = ctx.extensionSettings.MemoryPilot = ctx.extensionSettings.MemoryPilot || {};
+  root._global = root._global || {};
+  return root._global;
+}
+
 export function loadLegacyPanelValue(ctx, key, fallback) {
+  // API 配置使用全局服务端设置，确保更换浏览器后仍能恢复。
+  if (key === 'mp_api_config') {
+    const globalStore = getGlobalStore(ctx);
+    if (globalStore?.[key] != null) {
+      try { localStorage.setItem(key, JSON.stringify(globalStore[key])); } catch {}
+      return globalStore[key];
+    }
+    const legacyStore = getCurrentStore(ctx);
+    if (legacyStore?.[key] != null) {
+      const value = legacyStore[key];
+      if (globalStore) {
+        globalStore[key] = value;
+        try { ctx.saveSettingsDebounced?.(); } catch {}
+      }
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+      return value;
+    }
+  }
   try {
     const raw = localStorage.getItem(key);
     if (raw != null && raw !== '') return JSON.parse(raw);

@@ -92,9 +92,14 @@ export async function openPanel(initialTab = 'list', initialCfg = 'recall') {
     if (!c.extensionSettings[_EXT_NAME]._global) c.extensionSettings[_EXT_NAME]._global = {};
     return c.extensionSettings[_EXT_NAME]._global;
   };
+  const _getApiStore = () => _getGlobalStore();
   let _saveTimer = null;
-  const _saveDebounced = () => {
+  const _saveDebounced = (immediate = false) => {
     clearTimeout(_saveTimer);
+    if (immediate) {
+      try { window.SillyTavern?.getContext?.()?.saveSettingsDebounced?.(); } catch {}
+      return;
+    }
     _saveTimer = setTimeout(() => {
       try { window.SillyTavern?.getContext?.()?.saveSettingsDebounced?.(); } catch {}
     }, 10000);
@@ -116,6 +121,30 @@ export async function openPanel(initialTab = 'list', initialCfg = 'recall') {
     _saveDebounced();
   };
   const pullJson = async (key, fallback) => {
+    // API 配置必须跨浏览器同步：全局 extensionSettings 优先于浏览器缓存。
+    if (key === AK) {
+      try {
+        const apiStore = _getApiStore();
+        if (apiStore && apiStore[key] != null) {
+          try { localStorage.setItem(key, JSON.stringify(apiStore[key])); } catch {}
+          return apiStore[key];
+        }
+      } catch {}
+      // 兼容旧版本按聊天保存的 API 配置，并迁移到全局设置。
+      try {
+        const legacyStore = _getStore();
+        if (legacyStore && legacyStore[key] != null) {
+          const value = legacyStore[key];
+          const apiStore = _getApiStore();
+          if (apiStore) {
+            apiStore[key] = value;
+            _saveDebounced(true);
+          }
+          try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+          return value;
+        }
+      } catch {}
+    }
     try {
       const raw = localStorage.getItem(key);
       if (raw && raw.trim()) return JSON.parse(raw);
@@ -139,8 +168,8 @@ export async function openPanel(initialTab = 'list', initialCfg = 'recall') {
   const pushJson = async (key, value) => {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
     // Store in extensionSettings (server-synced, NOT in chat file)
-    const store = _getStore();
-    if (store) { store[key] = value; _saveDebounced(); }
+    const store = key === AK ? _getApiStore() : _getStore();
+    if (store) { store[key] = value; _saveDebounced(key === AK); }
   };
   const pullText = async (key, fallback='') => {
     try {
@@ -219,8 +248,9 @@ export async function openPanel(initialTab = 'list', initialCfg = 'recall') {
     memories = dedupeMemories(Array.isArray(arr) ? arr : []);
     await saveMemories(memories);
   };
-  const loadApi = ()=>{try{return JSON.parse(localStorage.getItem(AK))||{};}catch{}return{};};
-  const saveApi = async (cfg)=>{ await pushJson(AK, cfg || {}); };
+  let apiConfig = {};
+  const loadApi = ()=>apiConfig || {};
+  const saveApi = async (cfg)=>{ apiConfig = cfg || {}; await pushJson(AK, apiConfig); };
   const loadBlacklist = ()=>{try{const r=localStorage.getItem(BK);const a=r?JSON.parse(r):[];return Array.isArray(a)?a:[];}catch{}return[];};
   const saveBlacklist = async arr => { await pushJson(BK, Array.isArray(arr)?arr:[]); };
 
@@ -1182,7 +1212,7 @@ floorRange：该事件实际涵盖的起止楼层号 [start, end]，根据对话
   }
 
   await pullJson(BK, loadBlacklist());
-  await pullJson(AK, loadApi());
+  apiConfig = await pullJson(AK, {});
   const syncedPrompt = await pullText(PK, loadPrompt());
   if (syncedPrompt) { try { localStorage.setItem(PK, syncedPrompt); } catch {} }
   let editId=null;
